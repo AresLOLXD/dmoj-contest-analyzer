@@ -30,8 +30,10 @@ EXT_TO_JPLAG_LANG = {
 
 class Submission:
     def __init__(self, path: Path, username: str, problem: str,
-                 attempt: int, dt: datetime, result: str, ext: str):
+                 attempt: int, dt: datetime, result: str, ext: str,
+                 rel_path: str = ""):
         self.path = path
+        self.rel_path = rel_path
         self.username = username
         self.problem = problem
         self.attempt = attempt
@@ -92,5 +94,6 @@ def parse_submissions(root: Path):
                     dt=dt,
                     result=m.group("result"),
                     ext=m.group("ext").lower(),
+                    rel_path=f"{username}/{problem}/{f.name}",
                 ))
     return subs

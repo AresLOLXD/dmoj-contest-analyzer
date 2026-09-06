@@ -3,6 +3,13 @@ from datetime import datetime
 from dmoj_contest_analyzer.submissions import FNAME_RE, parse_submissions
 
 
+def test_submission_rel_path_is_relative(mini_export_tree):
+    subs = parse_submissions(mini_export_tree)
+    s = next(s for s in subs if s.username == "userA" and s.problem == "p1")
+    assert s.rel_path == "userA/p1/1_userA_2026-01-01_10-00-00_AC.cpp"
+    assert not s.rel_path.startswith("/")
+
+
 def test_fname_re_matches_valid():
     m = FNAME_RE.match("3_some_user_2026-01-02_14-30-45_AC.cpp")
     assert m and m.group("user") == "some_user" and m.group("result") == "AC"

@@ -38,7 +38,7 @@ def analyze_timing_style(subs):
             "avg_line_len": round(style["avg_line_len"], 1),
             "comment_ratio": round(style["comment_ratio"], 3),
             "avg_ident_len": round(style["avg_ident_len"], 2),
-            "archivo": str(first_ac.path),
+            "archivo": first_ac.rel_path,
             "jplag_max_similitud": None,
             "jplag_similar_con": None,
         })
