@@ -105,6 +105,7 @@ def test_reconcile_startup(conn, settings):
     assert jobs.reconcile_startup(conn) == 1
     assert jobs.get_job(conn, jid)["status"] == "failed"
     assert jobs.get_job(conn, jid)["error"] == "interrumpido por reinicio"
+    assert jobs.get_job(conn, jid)["finished_at"] is not None
 
 
 def test_sweep_stale_fails_old_jobs(conn, settings):
@@ -116,4 +117,5 @@ def test_sweep_stale_fails_old_jobs(conn, settings):
     fresh = _mk(conn, settings)
     jobs.sweep_stale(conn, settings)
     assert jobs.get_job(conn, jid)["status"] == "failed"
+    assert jobs.get_job(conn, jid)["finished_at"] is not None
     assert jobs.get_job(conn, fresh)["status"] == "queued"

@@ -120,8 +120,9 @@ def get_job(
 def reconcile_startup(conn: sqlite3.Connection) -> int:
     """Fail every job left ``running`` by a previous process. Returns the count."""
     cur = conn.execute(
-        "UPDATE jobs SET status='failed', error='interrumpido por reinicio' "
-        "WHERE status='running'"
+        "UPDATE jobs SET status='failed', error='interrumpido por reinicio', "
+        "finished_at=? WHERE status='running'",
+        (utcnow(),),
     )
     return cur.rowcount
 
@@ -132,9 +133,9 @@ def sweep_stale(conn: sqlite3.Connection, settings: Settings) -> None:
         utcnow(), _STALE_TIMEOUT_MULTIPLIER * settings.job_timeout_s
     )
     conn.execute(
-        "UPDATE jobs SET status='failed', error='expiró por antigüedad' "
-        "WHERE status IN ('queued', 'running') AND created_at < ?",
-        (cutoff,),
+        "UPDATE jobs SET status='failed', error='expiró por antigüedad', "
+        "finished_at=? WHERE status IN ('queued', 'running') AND created_at < ?",
+        (utcnow(), cutoff),
     )
 
 
