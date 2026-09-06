@@ -1,11 +1,13 @@
 import asyncio
 import io
+import struct
 import zipfile
 
 import pytest
 
 from dmoj_contest_analyzer.web.upload import (
     UploadRejected,
+    _extract,
     stream_to_file,
     validate_and_extract,
 )
@@ -109,6 +111,64 @@ def test_symlink_member_rejected(tmp_path, settings):
     zp = _write(tmp_path, buf.getvalue())
     with pytest.raises(UploadRejected):
         validate_and_extract(zp, tmp_path / "work", settings)
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "a\\..\\..\\evil",
+        "C:\\evil",
+        "a/../../b",
+        "sub/../../../etc/x",
+    ],
+)
+def test_unsafe_names_rejected(tmp_path, settings, bad_name):
+    zp = _write(tmp_path, make_zip({bad_name: b"x", **GOOD}))
+    with pytest.raises(UploadRejected) as e:
+        validate_and_extract(zp, tmp_path / "work", settings)
+    assert e.value.status == 422
+
+
+def _lying_size_zip(real_payload: bytes, declared: int = 10) -> bytes:
+    """A single entry whose central-directory uncompressed size is a lie."""
+    data = bytearray(make_zip({"userA/p1/1_userA_2026-01-01_10-00-00_AC.cpp": real_payload}))
+    cen = data.find(b"PK\x01\x02")
+    struct.pack_into("<I", data, cen + 24, declared)  # CEN uncompressed size
+    return bytes(data)
+
+
+def test_lying_entry_size_rejected(tmp_path, settings):
+    # Declared size (10) sails through steps 4-5; the real deflate stream is
+    # multi-MB and the mismatch is caught during extraction -> 422, not 500.
+    zp = _write(tmp_path, _lying_size_zip(b"A" * 3_000_000))
+    with pytest.raises(UploadRejected) as e:
+        validate_and_extract(zp, tmp_path / "work", settings)
+    assert e.value.status == 422
+
+
+def test_extract_byte_counter_aborts(tmp_path, settings):
+    # Directly exercise _extract's running written-byte guard: an honest 2 MB
+    # entry against a 1 KB cap must abort with the "extracted size" reason and
+    # leave no partial file behind.
+    payload = bytes(bytearray(range(256)) * 8192)  # 2 MiB, low compression ratio
+    zp = _write(tmp_path, make_zip({"userA/p1/1_userA_2026-01-01_10-00-00_AC.cpp": payload}))
+    work = tmp_path / "work"
+    with zipfile.ZipFile(zp) as zf:
+        with pytest.raises(UploadRejected) as e:
+            _extract(zf, zf.infolist(), work, max_unzipped=1024, settings=settings)
+    assert e.value.status == 422
+    assert "extraído" in e.value.reason
+    assert not (work / "userA/p1/1_userA_2026-01-01_10-00-00_AC.cpp").exists()
+
+
+def test_crafted_filename_bad_date_rejected(tmp_path, settings):
+    # Matches FNAME_RE but strptime would raise ValueError -> must be 422.
+    entries = dict(GOOD)
+    entries["userA/p1/1_userA_2026-13-45_99-99-99_AC.cpp"] = b"int main(){}\n"
+    zp = _write(tmp_path, make_zip(entries))
+    with pytest.raises(UploadRejected) as e:
+        validate_and_extract(zp, tmp_path / "work", settings)
+    assert e.value.status == 422
 
 
 def test_no_matching_files_rejected(tmp_path, settings):

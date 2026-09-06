@@ -135,12 +135,17 @@ def validate_and_extract(
 
     try:
         root = ingest._detect_root(work_dir)
-    except ingest.ExportStructureError as exc:
+        submissions = list(parse_submissions(root))
+    except UploadRejected:
+        raise
+    except Exception as exc:
+        # _detect_root raises ExportStructureError; parse_submissions can raise
+        # ValueError on a crafted filename that matches FNAME_RE but holds an
+        # impossible date. Never forward internal detail.
         raise UploadRejected(
             422, "El .zip no contiene un export de envíos DMOJ válido."
         ) from exc
 
-    submissions = list(parse_submissions(root))
     if not submissions:
         raise UploadRejected(
             422, "El .zip no contiene un export de envíos DMOJ válido."
@@ -181,16 +186,29 @@ def _extract(
                 422, "El .zip intenta escribir fuera del directorio de trabajo."
             )
         Path(dest).parent.mkdir(parents=True, exist_ok=True)
-        with zf.open(info) as src, open(dest, "wb") as out:
-            while True:
-                chunk = src.read(_CHUNK)
-                if not chunk:
-                    break
-                written_total += len(chunk)
-                if written_total > max_unzipped:
-                    raise UploadRejected(
-                        422,
-                        f"El contenido descomprimido supera "
-                        f"{settings.max_unzipped_mb} MB.",
-                    )
-                out.write(chunk)
+        try:
+            with zf.open(info) as src, open(dest, "wb") as out:
+                while True:
+                    chunk = src.read(_CHUNK)
+                    if not chunk:
+                        break
+                    written_total += len(chunk)
+                    if written_total > max_unzipped:
+                        raise UploadRejected(
+                            422,
+                            f"El contenido extraído del .zip supera el límite de "
+                            f"{settings.max_unzipped_mb} MB.",
+                        )
+                    out.write(chunk)
+        except UploadRejected:
+            # Remove the partial file we were mid-write on. Sibling files
+            # already extracted can stay: the caller owns the job dir and
+            # discards it on rejection.
+            Path(dest).unlink(missing_ok=True)
+            raise
+        except (zipfile.BadZipFile, EOFError, OSError, ValueError) as exc:
+            # A member that lies about its size / CRC, or a truncated stream.
+            Path(dest).unlink(missing_ok=True)
+            raise UploadRejected(
+                422, "El .zip contiene una entrada corrupta o manipulada."
+            ) from exc
