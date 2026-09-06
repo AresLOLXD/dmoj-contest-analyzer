@@ -3,6 +3,9 @@
 # a baked config file so there is no host bind mount to prepare.
 services:
   analyzer:
+    # CI builds and `docker load`s this tag first, then `compose up --no-build`
+    # runs it -- no rebuild, so the smoke test exercises the real image.
+    image: dmoj-analyzer:ci
     volumes:
       - data:/data
       - ./backends.example.toml:/config/backends.toml:ro

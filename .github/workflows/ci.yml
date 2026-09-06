@@ -19,3 +19,156 @@ jobs:
       - run: uv sync --locked --extra web
       - run: uv run ruff check .
       - run: uv run pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      JPLAG_VERSION: "6.3.0"
+      JPLAG_JAR: vendor/jplag-6.3.0-jar-with-dependencies.jar
+      # Fill this with the sha256 of the real GitHub release asset
+      # (jplag-6.3.0-jar-with-dependencies.jar). While it is the literal
+      # placeholder the job only logs the computed hash as a warning; once
+      # pinned it is enforced with `sha256sum -c` and a mismatch fails the job.
+      JPLAG_SHA256: "<SHA256>"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache JPlag jar
+        id: jplag-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.JPLAG_JAR }}
+          key: jplag-6.3.0
+
+      - name: Fetch and verify JPlag jar
+        if: steps.jplag-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p vendor
+          curl -fsSL -o "$JPLAG_JAR" \
+            "https://github.com/jplag/JPlag/releases/download/v${JPLAG_VERSION}/jplag-${JPLAG_VERSION}-jar-with-dependencies.jar"
+          actual="$(sha256sum "$JPLAG_JAR" | cut -d' ' -f1)"
+          if [ "$JPLAG_SHA256" = "<SHA256>" ]; then
+            echo "::warning::JPLAG_SHA256 placeholder not set. Computed sha256: ${actual}"
+            echo "TODO: pin JPLAG_SHA256 in .github/workflows/ci.yml to ${actual}"
+          else
+            echo "${JPLAG_SHA256}  ${JPLAG_JAR}" | sha256sum -c -
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: dmoj-analyzer:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the stack
+        env:
+          APP_SECRET_KEY: ci-secret
+        run: docker compose -f compose.yaml -f compose.ci.yaml up -d --no-build
+
+      - name: Wait for /healthz
+        run: |
+          set -eu
+          for i in $(seq 1 15); do
+            if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
+              echo "healthz ok after ${i} tries"; exit 0
+            fi
+            sleep 2
+          done
+          echo "healthz never became ready"
+          docker compose -f compose.yaml -f compose.ci.yaml logs
+          exit 1
+
+      - name: Assert resource limits applied
+        run: |
+          set -eu
+          cid="$(docker compose -f compose.yaml -f compose.ci.yaml ps -q analyzer)"
+          mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$cid")"
+          pids="$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$cid")"
+          echo "Memory=${mem} PidsLimit=${pids}"
+          test "$mem" -gt 0
+          test "$pids" -gt 0
+
+      - name: In-container smoke of the real upload path (JPlag under read_only)
+        run: |
+          set -euo pipefail
+          COMPOSE="docker compose -f compose.yaml -f compose.ci.yaml"
+          BASE=http://127.0.0.1:8000
+          JAR=/tmp/cookies.txt
+          PW1=ci-password-123
+          PW2=ci-password-456
+
+          csrf() { grep -o 'name="csrf" value="[^"]*"' | head -1 | sed 's/.*value="//;s/"//'; }
+
+          # 1. Trigger setup-token creation, then read it from the container.
+          curl -fsS -c "$JAR" -b "$JAR" "$BASE/setup" -o /tmp/setup.html
+          TOKEN="$($COMPOSE exec -T analyzer cat /data/setup_token)"
+          C="$(csrf < /tmp/setup.html)"
+          curl -fsS -c "$JAR" -b "$JAR" -o /dev/null \
+            --data-urlencode "csrf=$C" --data-urlencode "token=$TOKEN" \
+            --data-urlencode "username=ci" --data-urlencode "password=$PW1" \
+            --data-urlencode "password2=$PW1" "$BASE/setup"
+
+          # 2. Log in.
+          curl -fsS -c "$JAR" -b "$JAR" "$BASE/login" -o /tmp/login.html
+          C="$(csrf < /tmp/login.html)"
+          curl -fsS -c "$JAR" -b "$JAR" -o /dev/null \
+            --data-urlencode "csrf=$C" --data-urlencode "username=ci" \
+            --data-urlencode "password=$PW1" "$BASE/login"
+
+          # 3. Clear the forced password change (gate blocks /jobs otherwise).
+          curl -fsS -c "$JAR" -b "$JAR" "$BASE/account/password" -o /tmp/pw.html
+          C="$(csrf < /tmp/pw.html)"
+          curl -fsS -c "$JAR" -b "$JAR" -o /dev/null \
+            --data-urlencode "csrf=$C" --data-urlencode "old_password=$PW1" \
+            --data-urlencode "new_password=$PW2" --data-urlencode "new_password2=$PW2" \
+            "$BASE/account/password"
+
+          # 4. Build a >1 MB zip: 2 users, same problem, same language -> JPlag runs.
+          python3 - <<'PY'
+          import base64, os, zipfile
+          pad = "/* " + base64.b64encode(os.urandom(1_600_000)).decode() + " */\n"
+          a = "// solA\n" + pad + "int main(){return 0;}\n"
+          b = "// solB\nint f(){return 1;}\nint main(){return 0;}\n"
+          with zipfile.ZipFile("/tmp/contest.zip", "w", zipfile.ZIP_DEFLATED) as z:
+              z.writestr("userA/p1/1_userA_2026-01-01_10-00-00_AC.cpp", a)
+              z.writestr("userB/p1/1_userB_2026-01-01_09-00-00_AC.cpp", b)
+          print("zip bytes:", os.path.getsize("/tmp/contest.zip"))
+          PY
+          test "$(stat -c%s /tmp/contest.zip)" -gt 1048576
+
+          # 5. Submit the job through the real multipart path.
+          curl -fsS -c "$JAR" -b "$JAR" "$BASE/" -o /tmp/upload.html
+          C="$(csrf < /tmp/upload.html)"
+          LOC="$(curl -fsS -c "$JAR" -b "$JAR" -o /dev/null -D - \
+            -F "csrf=$C" -F "run_jplag=on" -F "archivo=@/tmp/contest.zip;type=application/zip" \
+            "$BASE/jobs" | grep -i '^location:' | tr -d '\r' | awk '{print $2}')"
+          echo "job location: $LOC"
+          case "$LOC" in /jobs/*) ;; *) echo "unexpected redirect: $LOC"; exit 1;; esac
+
+          # 6. Poll until done/failed.
+          for i in $(seq 1 90); do
+            STATUS="$(curl -fsS -c "$JAR" -b "$JAR" "$BASE$LOC" \
+              | grep -o 'Estado: <strong>[a-z]*</strong>' | sed 's/.*<strong>//;s/<.*//')"
+            echo "[$i] status=$STATUS"
+            case "$STATUS" in
+              done) echo "smoke passed"; exit 0 ;;
+              failed) curl -fsS -c "$JAR" -b "$JAR" "$BASE$LOC"; exit 1 ;;
+            esac
+            sleep 2
+          done
+          echo "job never finished"
+          exit 1
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f compose.ci.yaml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f compose.yaml -f compose.ci.yaml down -v
