@@ -1,0 +1,36 @@
+[project]
+name = "dmoj-contest-analyzer"
+version = "0.1.0"
+description = "Detecta patrones de envío sospechosos (IA/plagio) en exports de concursos DMOJ y corre JPlag, todo en un reporte Excel."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ares Ulises Juárez Martínez", email = "aresulises8@hotmail.com" }]
+dependencies = ["openpyxl>=3.1"]
+
+[project.scripts]
+dmoj-contest-analyzer = "dmoj_contest_analyzer.cli:main"
+
+[project.urls]
+Repository = "https://github.com/AresLOLXD/dmoj-contest-analyzer"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dmoj_contest_analyzer"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E741"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

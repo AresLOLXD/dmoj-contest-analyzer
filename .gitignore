@@ -1,4 +1,13 @@
-*.zip
-/jplag_input
-jplag.jar
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+*.xlsx
+*.jar
+jplag_input/
+/*.zip
 reporte.csv
