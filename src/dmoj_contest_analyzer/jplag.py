@@ -1,6 +1,8 @@
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import zipfile
 from collections import defaultdict
@@ -31,11 +33,24 @@ def prepare_jplag_input(subs, jplag_out: Path, solo_ac: bool):
     return counts
 
 
-def run_jplag(jplag_out: Path, counts, jplag_jar: str):
+class JplagTimeout(Exception):
+    """A JPlag invocation exceeded its wall-clock budget and was killed."""
+
+
+def _jplag_cmd(in_dir, lang, result_name, jar):
+    return ["java", "-jar", jar, str(in_dir), "-l", lang,
+            "-r", str(result_name), "-M", "RUN"]
+
+
+def run_jplag(jplag_out: Path, counts, jplag_jar: str, *, timeout=None,
+              on_progress=lambda _: None, on_subprocess=lambda _: None):
     """
     Corre JPlag con -M RUN (no abre visor, no espera Enter) para cada
     (problema, lenguaje) con 2+ usuarios. Devuelve la lista de rutas
     .jplag generadas.
+
+    Cada invocación se lanza en su propio grupo de procesos; si supera
+    ``timeout`` segundos se mata el grupo completo y se lanza ``JplagTimeout``.
     """
     result_paths = []
     for (problem, lang), n in sorted(counts.items()):
@@ -43,14 +58,28 @@ def run_jplag(jplag_out: Path, counts, jplag_jar: str):
             continue
         in_dir = jplag_out / problem / lang
         result_name = jplag_out / problem / f"{lang}_resultado"
-        cmd = ["java", "-jar", jplag_jar, str(in_dir), "-l", lang, "-r", str(result_name), "-M", "RUN"]  # noqa: E501
-        print(f"# {problem} / {lang}  ({n} usuarios)")
-        print("  " + " ".join(cmd))
-        subprocess.run(cmd, check=False, stdin=subprocess.DEVNULL)
+        cmd = _jplag_cmd(in_dir, lang, result_name, jplag_jar)
+        on_progress(f"# {problem} / {lang}  ({n} usuarios)")
+        on_progress("  " + " ".join(cmd))
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        on_subprocess(proc)
+        try:
+            proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+            raise JplagTimeout(f"{problem}/{lang} excedió {timeout}s") from exc
         jplag_file = result_name.with_suffix(".jplag")
         if jplag_file.exists():
             result_paths.append((problem, lang, jplag_file))
-        print()
+        on_progress("")
     return result_paths
 
 
@@ -78,7 +107,8 @@ def _format_version(vinfo) -> str:
     return "desconocida"
 
 
-def parse_jplag_result(problem: str, lang: str, jplag_file: Path):
+def parse_jplag_result(problem: str, lang: str, jplag_file: Path, *,
+                       on_progress=lambda _: None):
     """
     Abre el .jplag (zip) con el formato de reporte de la serie 6.x de JPlag y
     devuelve una lista de dicts {problema, lenguaje, usuario_a, usuario_b,
@@ -95,11 +125,11 @@ def parse_jplag_result(problem: str, lang: str, jplag_file: Path):
                     run_info = json.load(f)
             vinfo = run_info.get("version") if isinstance(run_info, dict) else None
             version = _format_version(vinfo)
-            print(f"  {jplag_file.name}: reporte de JPlag {version}")
+            on_progress(f"  {jplag_file.name}: reporte de JPlag {version}")
             major = vinfo.get("major") if isinstance(vinfo, dict) else None
             if isinstance(major, int) and major != 6:
-                print(f"  [!] {jplag_file.name}: versión de JPlag {version} no probada; "
-                      f"el parser espera la serie 6.x.")
+                on_progress(f"  [!] {jplag_file.name}: versión de JPlag {version} no probada; "
+                            f"el parser espera la serie 6.x.")
 
             id_to_name = {}
             if "submissionMappings.json" in names:
@@ -111,9 +141,9 @@ def parse_jplag_result(problem: str, lang: str, jplag_file: Path):
             comparison_names = [n for n in names
                                 if n.startswith("comparisons/") and n.endswith(".json")]
             if not comparison_names:
-                print(f"  [!] {jplag_file.name}: no se encontró la carpeta 'comparisons/' "
-                      f"dentro del zip. ¿Es un reporte de JPlag 6.x? "
-                      f"Archivos presentes: {names[:10]}{'...' if len(names) > 10 else ''}")
+                on_progress(f"  [!] {jplag_file.name}: no se encontró la carpeta 'comparisons/' "
+                            f"dentro del zip. ¿Es un reporte de JPlag 6.x? "
+                            f"Archivos presentes: {names[:10]}{'...' if len(names) > 10 else ''}")
                 return rows
 
             for cname in comparison_names:
@@ -137,7 +167,7 @@ def parse_jplag_result(problem: str, lang: str, jplag_file: Path):
                     "similitud": round(sim_pct, 1),
                 })
     except Exception as e:
-        print(f"  [!] No se pudo abrir/leer {jplag_file}: {e}")
+        on_progress(f"  [!] No se pudo abrir/leer {jplag_file}: {e}")
         return rows
 
     return rows

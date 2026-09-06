@@ -66,7 +66,10 @@ def run_analysis(
             counts = prepare_jplag_input(subs, opts.jplag_out, opts.jplag_solo_ac)
             on_progress(f"\nEstructura de JPlag creada en: {opts.jplag_out.resolve()}")
             on_progress("\n--- JPlag ---")
-            results = run_jplag(opts.jplag_out, counts, opts.jplag_jar)
+            results = run_jplag(
+                opts.jplag_out, counts, opts.jplag_jar,
+                on_progress=on_progress, on_subprocess=on_subprocess,
+            )
         else:
             results = find_existing_jplag_results(opts.jplag_out)
             on_progress(
@@ -76,7 +79,7 @@ def run_analysis(
 
         on_progress("\n--- Parseando resultados de JPlag ---")
         for problem, lang, jf in results:
-            rows = parse_jplag_result(problem, lang, jf)
+            rows = parse_jplag_result(problem, lang, jf, on_progress=on_progress)
             on_progress(f"  {jf.name}: {len(rows)} comparaciones extraídas")
             jplag_rows.extend(rows)
 

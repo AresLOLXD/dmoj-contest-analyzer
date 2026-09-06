@@ -74,7 +74,7 @@ def main() -> None:
                     jplag_solo_ac=args.jplag_solo_ac,
                     jplag_jar=jplag_jar,
                 ),
-                on_progress=lambda _: None,
+                on_progress=print,
             )
         except NoSubmissionsError:
             print("No se encontraron archivos que coincidan con el patrón esperado.")

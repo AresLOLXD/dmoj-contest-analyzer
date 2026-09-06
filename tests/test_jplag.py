@@ -19,7 +19,7 @@ def test_parse_jplag_result_skips_zero_similarity(sample_jplag_file):
 
 
 def test_parse_jplag_result_reports_version(sample_jplag_file, capsys):
-    parse_jplag_result("p1", "cpp", sample_jplag_file)
+    parse_jplag_result("p1", "cpp", sample_jplag_file, on_progress=print)
     assert "JPlag 6.3.0" in capsys.readouterr().out
 
 
