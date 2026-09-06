@@ -33,6 +33,21 @@ def test_run_analysis_runs_llm_judge(mini_export_tree, tmp_path):
     assert all(r["llm_modelo"] == "openai|gpt-4o" for r in data.main_rows)
 
 
+def test_run_analysis_forwards_jplag_timeout(mini_export_tree, tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run_jplag(jplag_out, counts, jar, *, timeout=None, on_progress, on_subprocess):
+        captured["timeout"] = timeout
+        return []
+
+    monkeypatch.setattr("dmoj_contest_analyzer.analysis.run_jplag", fake_run_jplag)
+    opts = AnalysisOptions(
+        jplag_out=tmp_path / "j", run_jplag=True, jplag_jar="x", jplag_timeout_s=42,
+    )
+    run_analysis(mini_export_tree, tmp_path / "r.xlsx", opts)
+    assert captured["timeout"] == 42
+
+
 def test_run_analysis_no_submissions_raises(tmp_path):
     empty = tmp_path / "empty"
     (empty / "not-a-user").mkdir(parents=True)

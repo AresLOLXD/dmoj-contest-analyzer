@@ -30,6 +30,7 @@ class AnalysisOptions:
     run_jplag: bool = False
     jplag_solo_ac: bool = False
     jplag_jar: str | None = None
+    jplag_timeout_s: float | None = None
     llm_max_submissions: int = 200
     llm_max_source_bytes: int = 1_000_000
 
@@ -73,6 +74,7 @@ def run_analysis(
             on_progress("\n--- JPlag ---")
             results = run_jplag(
                 opts.jplag_out, counts, opts.jplag_jar,
+                timeout=opts.jplag_timeout_s,
                 on_progress=on_progress, on_subprocess=on_subprocess,
             )
         else:

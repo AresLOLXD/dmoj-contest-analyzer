@@ -13,9 +13,12 @@ import asyncio
 import functools
 import logging
 import multiprocessing as mp
+import os
 import queue
 import shutil
+import signal
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -68,6 +71,14 @@ def _analyze_sync(
         except Exception:
             pass
 
+    def on_subprocess(proc) -> None:
+        # Report the JVM's process-group id so the parent coroutine can SIGKILL
+        # the whole group as an outer backstop if the job times out (layer b).
+        try:
+            push(("jvm_pgid", os.getpgid(proc.pid)))
+        except (OSError, AttributeError):
+            pass
+
     work = Path(work_dir)
     validate_and_extract(Path(zip_path), work, _OptsSettings(opts_dict))
     root = ingest._detect_root(work)
@@ -77,9 +88,13 @@ def _analyze_sync(
         run_jplag=opts_dict["run_jplag"],
         jplag_solo_ac=opts_dict["jplag_solo_ac"],
         jplag_jar=opts_dict["jplag_jar"],
+        # Layer a: the normal path — a stuck JVM is killed from inside this
+        # subprocess after jplag_per_invocation_timeout_s.
+        jplag_timeout_s=opts_dict["jplag_timeout_s"],
         llm_max_source_bytes=opts_dict["max_submission_bytes"],
     )
-    data = run_analysis(root, Path(out_path), opts, on_progress=push)
+    data = run_analysis(root, Path(out_path), opts, on_progress=push,
+                        on_subprocess=on_subprocess)
     return {
         "source_dir": str(root),
         "main_rows": data.main_rows,
@@ -105,6 +120,7 @@ def _opts_dict(row, settings) -> dict:
         "jplag_solo_ac": bool(row["jplag_solo_ac"]),
         "jplag_out": str(work_parent / "jplag") if run_jplag else None,
         "jplag_jar": str(settings.jplag_jar),
+        "jplag_timeout_s": settings.jplag_per_invocation_timeout_s,
         "max_submission_bytes": settings.max_submission_bytes,
         "upload_limits": {
             "max_unzipped_mb": settings.max_unzipped_mb,
@@ -138,16 +154,29 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
             _opts_dict(row, settings), progress_q,
         ),
     )
-    drainer = asyncio.create_task(_drain_progress(progress_q, conn, jid))
+    # JVM process-group ids reported by the subprocess via the progress queue.
+    jvm_pgids: set[int] = set()
+    drainer = asyncio.create_task(_drain_progress(progress_q, conn, jid, jvm_pgids))
     try:
         result = await asyncio.wait_for(asyncio.shield(fut), settings.job_timeout_s)
     except TimeoutError:
-        # A ProcessPoolExecutor future cannot be cancelled once running, so the
-        # whole (potentially poisoned) pool is discarded, never reused.
-        executor.shutdown(wait=False, cancel_futures=True)
-        if app_state is not None:
-            app_state.executor = make_executor(settings)
+        # Layer b (backstop): a ProcessPoolExecutor future cannot be cancelled
+        # once running, so SIGKILL every recorded JVM process group and discard
+        # the whole (potentially poisoned) pool -- it is never reused.
+        for pgid in jvm_pgids:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        _replace_pool(executor, settings, app_state)
         jobs.set_status(conn, jid, "failed", error="expiró el tiempo límite", finished=True)
+        return True
+    except BrokenProcessPool:
+        # Subprocess crashed (segfault / OOM-kill). The pool is permanently
+        # broken, so swap in a fresh one just like the timeout path.
+        _replace_pool(executor, settings, app_state)
+        jobs.set_status(conn, jid, "failed", error="el análisis terminó de forma anómala",
+                        finished=True)
         return True
     except UploadRejected as exc:
         jobs.set_status(conn, jid, "failed", error=exc.reason, finished=True)
@@ -166,7 +195,7 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
             await drainer
         except asyncio.CancelledError:
             pass
-        _drain_remaining(progress_q, conn, jid)
+        _drain_remaining(progress_q, conn, jid, jvm_pgids)
         manager.shutdown()
 
     data = ReportData(
@@ -273,16 +302,27 @@ def _daily_cap_ok(conn, settings, state: _CapState) -> bool:
     return True
 
 
-async def _drain_progress(progress_q, conn, jid: str) -> None:
+def _replace_pool(executor: ProcessPoolExecutor, settings, app_state) -> None:
+    """Discard a poisoned/broken pool and hand the caller a fresh one."""
+    executor.shutdown(wait=False, cancel_futures=True)
+    if app_state is not None:
+        app_state.executor = make_executor(settings)
+
+
+async def _drain_progress(progress_q, conn, jid: str, jvm_pgids: set[int]) -> None:
     while True:
-        _drain_remaining(progress_q, conn, jid)
+        _drain_remaining(progress_q, conn, jid, jvm_pgids)
         await asyncio.sleep(_DRAIN_INTERVAL_S)
 
 
-def _drain_remaining(progress_q, conn, jid: str) -> None:
+def _drain_remaining(progress_q, conn, jid: str, jvm_pgids: set[int]) -> None:
     try:
         while True:
-            jobs.set_progress(conn, jid, progress_q.get_nowait())
+            msg = progress_q.get_nowait()
+            if isinstance(msg, tuple) and msg and msg[0] == "jvm_pgid":
+                jvm_pgids.add(msg[1])
+            else:
+                jobs.set_progress(conn, jid, msg)
     except (queue.Empty, EOFError, OSError):
         pass
 

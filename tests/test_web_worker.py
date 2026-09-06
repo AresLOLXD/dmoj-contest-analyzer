@@ -1,4 +1,5 @@
 import asyncio
+import os
 import uuid
 from types import SimpleNamespace
 
@@ -30,6 +31,10 @@ supports_response_format = true
 def _slow_analyze(*a, **k):
     import time
     time.sleep(5)
+
+
+def _crash_analyze(*a, **k):
+    os._exit(1)
 
 
 def _enqueue(conn, settings, model_ref=None):
@@ -79,6 +84,26 @@ async def test_timeout_marks_failed_and_frees_queue(conn, settings, monkeypatch)
         state.executor.shutdown(wait=False, cancel_futures=True)
     assert jobs.get_job(conn, jid)["status"] == "failed"
     assert state.executor is not ex  # poisoned pool discarded
+
+
+@pytest.mark.asyncio
+async def test_broken_pool_recovers(conn, settings, monkeypatch):
+    jid1 = _enqueue(conn, settings)
+    monkeypatch.setattr(worker, "_analyze_sync", _crash_analyze)
+    ex = worker.make_executor(settings)
+    state = SimpleNamespace(executor=ex)
+    assert await worker.process_one_job(conn, settings, ex, app_state=state) is True
+    assert jobs.get_job(conn, jid1)["status"] == "failed"
+    assert state.executor is not ex  # broken pool replaced
+
+    monkeypatch.undo()
+    jid2 = _enqueue(conn, settings)
+    try:
+        assert await worker.process_one_job(
+            conn, settings, state.executor, app_state=state) is True
+    finally:
+        state.executor.shutdown(wait=True)
+    assert jobs.get_job(conn, jid2)["status"] == "done"
 
 
 @pytest.mark.asyncio
