@@ -1,0 +1,24 @@
+#include <bits/stdc++.h>
+using namespace std;
+int main() {
+int a, b,c;
+int k=0;
+int v;
+int x;
+int z;
+cin >>a>> b>>c >> k;
+k=k*2;
+v = (k* a) + b+c;
+x = (k*b) + a+c;
+z= (k*c) + b +a;
+if ( v > x and v> z){
+cout << v;
+ }else if (x > v and x > z ){
+cout << x;
+ }
+if ( z> v and z > x){
+cout << z;
+
+}
+ return 0;
+}

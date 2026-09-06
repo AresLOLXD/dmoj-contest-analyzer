@@ -203,8 +203,15 @@ Secciones:
 3. Commit inicial.
 4. `gh repo create AresLOLXD/dmoj-contest-analyzer --public --source=. --push`.
 
-Los artefactos actuales del directorio (`analiza_concurso.py`, `jplag.jar`,
-`estatal2026d1mxcdmx.zip`, `estatal2026d1mxcdmx/`, `jplag_input/`, `reporte.csv`,
-`.venv/`) no se incluyen en el repo: los ignora `.gitignore` o se remueven. El
-`analiza_concurso.py` original se elimina una vez que su lógica vive en los
-módulos y los tests pasan.
+El proyecto se reestructura **en este mismo directorio** (`OMI-CDMX-D1/`), que se
+convierte en el repo `dmoj-contest-analyzer`.
+
+Artefactos actuales y su destino:
+- `estatal2026d1mxcdmx.zip` → **se conserva** en el directorio (gitignoreado por
+  `/*.zip`). Sirve como dato real para verificación manual.
+- `analiza_concurso.py` → se elimina una vez que su lógica vive en los módulos y
+  los tests pasan.
+- `jplag.jar` → se elimina del directorio (el usuario lo provee vía `--jplag-jar`
+  / `JPLAG_JAR`).
+- `estatal2026d1mxcdmx/` (carpeta extraída), `jplag_input/`, `reporte.csv`,
+  `.venv/` → se eliminan; `.venv` se regenera con `uv sync`.
