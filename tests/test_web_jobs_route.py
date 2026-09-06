@@ -1,4 +1,6 @@
+import os
 import re
+import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -126,6 +128,35 @@ def test_uncaught_500_still_has_security_headers(settings, monkeypatch):
     assert "default-src 'self'" in r.headers["content-security-policy"]
     assert "secret internal detail" not in r.text
     assert "Traceback" not in r.text
+
+
+def test_lifespan_creates_data_tmp_dir(settings):
+    tmp = settings.data_dir / "tmp"
+    assert not tmp.exists()
+    with TestClient(create_app(settings, start_worker=False), base_url="https://testserver"):
+        assert tmp.is_dir()
+
+
+def test_post_job_large_upload_spools_to_disk(client, settings, monkeypatch):
+    # A >1 MB multipart part rolls Starlette's SpooledTemporaryFile over to
+    # tempfile in $TMPDIR (= DATA_DIR/tmp under the hardened compose). Point
+    # TMPDIR there: the lifespan must have created it or POST /jobs raises
+    # FileNotFoundError.
+    monkeypatch.setattr(tempfile, "tempdir", str(settings.data_dir / "tmp"))
+    assert (settings.data_dir / "tmp").is_dir()
+    assert _login(client).status_code == 303
+    token = _csrf(client.get("/").text)
+    entries = dict(GOOD)
+    entries["userA/p1/pad.bin"] = os.urandom(2 * 1024 * 1024)  # incompressible
+    files = {"archivo": ("e.zip", make_zip(entries), "application/zip")}
+    r = client.post(
+        "/jobs",
+        data={"csrf": token, "run_jplag": "false"},
+        files=files,
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert "/jobs/" in r.headers["location"]
 
 
 def test_healthz_unhealthy_without_jar(client):

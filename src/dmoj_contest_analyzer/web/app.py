@@ -44,6 +44,9 @@ def create_app(settings: Settings | None = None, *, start_worker: bool = True) -
         conn = connect(settings.db_path())
         migrate(conn)
         jobs.reconcile_startup(conn)
+        # TMPDIR points here (compose): keep the multipart upload spool on the
+        # data volume, not RAM, and make it exist under a read_only rootfs.
+        (settings.data_dir / "tmp").mkdir(parents=True, exist_ok=True)
         app.state.settings = settings
         app.state.conn = conn
         app.state.nudge = asyncio.Event()
