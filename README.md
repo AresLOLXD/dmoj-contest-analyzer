@@ -18,7 +18,10 @@ requieren evidencia adicional.
 - Python 3.11 o superior
 - [uv](https://docs.astral.sh/uv/) para gestionar el entorno y las dependencias
 - Solo si vas a usar JPlag:
-  - Java 11 o superior en el `PATH`
+  - **JPlag 6.x** (probado con la versión **6.3.0**). El parser del reporte
+    `.jplag` espera el formato de la serie 6.x; versiones mayores anteriores o
+    posteriores pueden no producir resultados.
+  - Java 21 o superior en el `PATH` (lo exige JPlag 6.x)
   - El `.jar` de JPlag, que **no viene incluido**: descárgalo de
     <https://github.com/jplag/JPlag/releases>
 
@@ -116,7 +119,7 @@ Un archivo `.xlsx` con tres hojas:
 | --- | --- |
 | `Resumen` | Totales del concurso: submissions procesadas, usuarios y problemas distintos, casos con `score_sospecha >= 2`, y pares JPlag con similitud `>= 70%` |
 | `Timing y Estilo` | Una fila por `(usuario, problema)` con primer AC: `score_sospecha`, `un_solo_intento`, intentos antes del AC, segundos desde el primer envío del usuario, `z_tiempo_vs_grupo`, métricas de estilo y la similitud máxima de JPlag |
-| `JPlag - Pares` | Una fila por comparación de JPlag: problema, lenguaje, los dos usuarios y la similitud (0-100) |
+| `JPlag - Pares` | Una fila por comparación de JPlag: problema, lenguaje, los dos usuarios y la similitud (0-100). Se omiten los pares con similitud 0 |
 
 ### Cómo se calcula `score_sospecha`
 
@@ -136,10 +139,11 @@ Se marca como **alerta para revisión manual prioritaria** cuando
 
 ## Limitaciones conocidas
 
-- **Parser de `overview.json` de JPlag**: la extracción de comparaciones del
-  archivo `.jplag` es heurística (prueba varios nombres de clave conocidos) y
-  puede dejar de funcionar cuando JPlag cambia el formato de su reporte entre
-  versiones. Si una versión nueva de JPlag no produce resultados, ese es el
+- **Parser del reporte `.jplag`**: se lee el formato de la serie **6.x** de
+  JPlag (carpeta `comparisons/` y `submissionMappings.json` dentro del zip). La
+  versión que generó cada reporte se toma de `runInformation.json` y se imprime
+  en la salida; si el número mayor no es 6, se avisa. Si una versión nueva de
+  JPlag deja de producir resultados, `src/dmoj_contest_analyzer/jplag.py` es el
   primer lugar a revisar.
 - **Formato de nombres**: todo el análisis depende de que los archivos sigan
   exactamente el patrón de nombres del downloader. Archivos que no coincidan se

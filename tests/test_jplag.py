@@ -1,19 +1,7 @@
 import json
+import zipfile
 
-from dmoj_contest_analyzer.jplag import (
-    extract_comparisons_from_json,
-    merge_jplag_into_main,
-    parse_jplag_result,
-)
-
-
-def test_extract_comparisons_known_shape():
-    data = json.loads(
-        '{"comparisons":[{"firstSubmissionId":"a.cpp","secondSubmissionId":"b.cpp",'
-        '"similarities":{"AVG":0.5,"MAX":0.75}}]}'
-    )
-    got = extract_comparisons_from_json(data)
-    assert got == [("a.cpp", "b.cpp", 0.75)]
+from dmoj_contest_analyzer.jplag import merge_jplag_into_main, parse_jplag_result
 
 
 def test_parse_jplag_result_reads_zip(sample_jplag_file):
@@ -22,6 +10,24 @@ def test_parse_jplag_result_reads_zip(sample_jplag_file):
     r = rows[0]
     assert {r["usuario_a"], r["usuario_b"]} == {"userA", "userC"}
     assert r["similitud"] == 90.0
+
+
+def test_parse_jplag_result_skips_zero_similarity(sample_jplag_file):
+    rows = parse_jplag_result("p1", "cpp", sample_jplag_file)
+    assert all(r["similitud"] > 0 for r in rows)
+    assert not any({r["usuario_a"], r["usuario_b"]} == {"userA", "userB"} for r in rows)
+
+
+def test_parse_jplag_result_reports_version(sample_jplag_file, capsys):
+    parse_jplag_result("p1", "cpp", sample_jplag_file)
+    assert "JPlag 6.3.0" in capsys.readouterr().out
+
+
+def test_parse_jplag_result_wrong_format_returns_empty(tmp_path):
+    bad = tmp_path / "cpp_resultado.jplag"
+    with zipfile.ZipFile(bad, "w") as zf:
+        zf.writestr("overview.json", json.dumps({"comparisons": []}))
+    assert parse_jplag_result("p1", "cpp", bad) == []
 
 
 def test_merge_bumps_score_when_similarity_high():

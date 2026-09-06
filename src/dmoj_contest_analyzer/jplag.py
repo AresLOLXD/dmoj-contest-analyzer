@@ -66,86 +66,80 @@ def find_existing_jplag_results(jplag_out: Path):
     return results
 
 
-ID_KEY_PAIRS = [
-    ("firstsubmissionid", "secondsubmissionid"),
-    ("firstsubmission", "secondsubmission"),
-    ("submission1", "submission2"),
-    ("id1", "id2"),
-    ("first", "second"),
-]
-
-
 def _strip_ext(name: str) -> str:
     return re.sub(r"\.\w+$", "", name)
 
 
-def extract_comparisons_from_json(data):
-    """Devuelve lista de (id1, id2, similitud_0_a_1_o_100)."""
-    found = []
-
-    def walk(obj):
-        if isinstance(obj, dict):
-            lower_keys = {k.lower(): k for k in obj.keys()}
-            for k1, k2 in ID_KEY_PAIRS:
-                if k1 in lower_keys and k2 in lower_keys:
-                    id1 = obj[lower_keys[k1]]
-                    id2 = obj[lower_keys[k2]]
-                    sim = None
-                    if "similarities" in lower_keys and isinstance(obj[lower_keys["similarities"]], dict):  # noqa: E501
-                        vals = [v for v in obj[lower_keys["similarities"]].values() if isinstance(v, (int, float))]  # noqa: E501
-                        if vals:
-                            sim = max(vals)
-                    elif "similarity" in lower_keys and isinstance(obj[lower_keys["similarity"]], (int, float)):  # noqa: E501
-                        sim = obj[lower_keys["similarity"]]
-                    if isinstance(id1, str) and isinstance(id2, str) and sim is not None:
-                        found.append((id1, id2, sim))
-                    break
-            for v in obj.values():
-                walk(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                walk(item)
-
-    walk(data)
-    return found
+def _format_version(vinfo) -> str:
+    if isinstance(vinfo, dict):
+        parts = [vinfo.get("major"), vinfo.get("minor"), vinfo.get("patch")]
+        if all(isinstance(p, int) for p in parts):
+            return ".".join(str(p) for p in parts)
+    return "desconocida"
 
 
 def parse_jplag_result(problem: str, lang: str, jplag_file: Path):
     """
-    Abre el .jplag (zip), lee overview.json, y devuelve una lista de dicts:
-    {problema, lenguaje, usuario_a, usuario_b, similitud} con similitud en
-    escala 0-100.
+    Abre el .jplag (zip) con el formato de reporte de la serie 6.x de JPlag y
+    devuelve una lista de dicts {problema, lenguaje, usuario_a, usuario_b,
+    similitud} con similitud en escala 0-100. Se omiten los pares con similitud 0.
     """
     rows = []
     try:
         with zipfile.ZipFile(jplag_file) as zf:
             names = zf.namelist()
-            overview_name = next((n for n in names if n.endswith("overview.json")), None)
-            if overview_name is None:
-                print(f"  [!] {jplag_file}: no se encontró overview.json dentro del zip. "
+
+            run_info = {}
+            if "runInformation.json" in names:
+                with zf.open("runInformation.json") as f:
+                    run_info = json.load(f)
+            vinfo = run_info.get("version") if isinstance(run_info, dict) else None
+            version = _format_version(vinfo)
+            print(f"  {jplag_file.name}: reporte de JPlag {version}")
+            major = vinfo.get("major") if isinstance(vinfo, dict) else None
+            if isinstance(major, int) and major != 6:
+                print(f"  [!] {jplag_file.name}: versión de JPlag {version} no probada; "
+                      f"el parser espera la serie 6.x.")
+
+            id_to_name = {}
+            if "submissionMappings.json" in names:
+                with zf.open("submissionMappings.json") as f:
+                    mappings = json.load(f)
+                if isinstance(mappings, dict):
+                    id_to_name = mappings.get("submissionIds") or {}
+
+            comparison_names = [n for n in names
+                                if n.startswith("comparisons/") and n.endswith(".json")]
+            if not comparison_names:
+                print(f"  [!] {jplag_file.name}: no se encontró la carpeta 'comparisons/' "
+                      f"dentro del zip. ¿Es un reporte de JPlag 6.x? "
                       f"Archivos presentes: {names[:10]}{'...' if len(names) > 10 else ''}")
                 return rows
-            with zf.open(overview_name) as f:
-                data = json.load(f)
+
+            for cname in comparison_names:
+                with zf.open(cname) as f:
+                    data = json.load(f)
+                id1 = data.get("firstSubmissionId")
+                id2 = data.get("secondSubmissionId")
+                sims = data.get("similarities") or {}
+                sim = sims.get("MAX", sims.get("AVG"))
+                if not (isinstance(id1, str) and isinstance(id2, str)
+                        and isinstance(sim, (int, float))):
+                    continue
+                if sim <= 0:
+                    continue
+                sim_pct = sim * 100 if 0 <= sim <= 1.0 else sim
+                rows.append({
+                    "problema": problem,
+                    "lenguaje": lang,
+                    "usuario_a": _strip_ext(id_to_name.get(id1, id1)),
+                    "usuario_b": _strip_ext(id_to_name.get(id2, id2)),
+                    "similitud": round(sim_pct, 1),
+                })
     except Exception as e:
         print(f"  [!] No se pudo abrir/leer {jplag_file}: {e}")
         return rows
 
-    comparisons = extract_comparisons_from_json(data)
-    if not comparisons:
-        print(f"  [!] No se encontraron comparaciones reconocibles en {jplag_file.name}. "
-              f"Claves de nivel superior de overview.json: {list(data.keys()) if isinstance(data, dict) else type(data)}")  # noqa: E501
-        return rows
-
-    for id1, id2, sim in comparisons:
-        sim_pct = sim * 100 if 0 <= sim <= 1.0 else sim
-        rows.append({
-            "problema": problem,
-            "lenguaje": lang,
-            "usuario_a": _strip_ext(id1),
-            "usuario_b": _strip_ext(id2),
-            "similitud": round(sim_pct, 1),
-        })
     return rows
 
 

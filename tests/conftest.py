@@ -53,17 +53,23 @@ def wrapped_zip(tmp_path_factory, mini_export_tree) -> Path:
 
 @pytest.fixture(scope="session")
 def sample_jplag_file(tmp_path_factory) -> Path:
-    overview = {
-        "submissions": ["userA.cpp", "userC.cpp"],
-        "comparisons": [
-            {
-                "firstSubmissionId": "userA.cpp",
-                "secondSubmissionId": "userC.cpp",
-                "similarities": {"AVG": 0.82, "MAX": 0.9},
-            }
-        ],
+    """Un reporte con el formato de la serie 6.x de JPlag."""
+    mappings = {"submissionIds": {"userA.cpp": "userA.cpp", "userC.cpp": "userC.cpp"}}
+    run_info = {"version": {"major": 6, "minor": 3, "patch": 0}}
+    hit = {
+        "firstSubmissionId": "userA.cpp",
+        "secondSubmissionId": "userC.cpp",
+        "similarities": {"AVG": 0.82, "MAX": 0.9, "MAXIMUM_LENGTH": 42.0, "LONGEST_MATCH": 20.0},
+    }
+    zero = {
+        "firstSubmissionId": "userA.cpp",
+        "secondSubmissionId": "userB.cpp",
+        "similarities": {"AVG": 0.0, "MAX": 0.0, "MAXIMUM_LENGTH": 10.0, "LONGEST_MATCH": 0.0},
     }
     zpath = tmp_path_factory.mktemp("jplag") / "cpp_resultado.jplag"
     with zipfile.ZipFile(zpath, "w") as zf:
-        zf.writestr("overview.json", json.dumps(overview))
+        zf.writestr("submissionMappings.json", json.dumps(mappings))
+        zf.writestr("runInformation.json", json.dumps(run_info))
+        zf.writestr("comparisons/userA.cpp-userC.cpp.json", json.dumps(hit))
+        zf.writestr("comparisons/userA.cpp-userB.cpp.json", json.dumps(zero))
     return zpath
