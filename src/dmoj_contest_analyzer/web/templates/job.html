@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Trabajo {{ job.id }}{% endblock %}
+{% block head %}
+{% if job.status in ("queued", "running") %}<meta http-equiv="refresh" content="3">{% endif %}
+{% endblock %}
+{% block content %}
+<h1>Trabajo</h1>
+<p class="mono">{{ job.id }}</p>
+<p>Estado: <strong>{{ job.status }}</strong></p>
+{% if job.progress %}<p>Progreso: {{ job.progress }}</p>{% endif %}
+{% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
+{% if job.status == "done" %}
+<p><a href="/jobs/{{ job.id }}/report">Descargar reporte (.xlsx)</a></p>
+{% endif %}
+{% if job.status == "queued" %}
+<form method="post" action="/jobs/{{ job.id }}/cancel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <button type="submit">Cancelar</button>
+</form>
+{% endif %}
+{% endblock %}

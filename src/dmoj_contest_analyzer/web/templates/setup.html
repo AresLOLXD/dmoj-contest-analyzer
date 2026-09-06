@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Configuración inicial{% endblock %}
+{% block content %}
+<h1>Configuración inicial</h1>
+<p>Crea la primera cuenta. El token de un solo uso se imprimió en la salida del servidor
+y está en <code>DATA_DIR/setup_token</code>.</p>
+<form method="post" action="/setup">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Token de configuración <input name="token" required></label>
+  <label>Usuario <input name="username" required></label>
+  <label>Contraseña <input type="password" name="password" required></label>
+  <label>Repite la contraseña <input type="password" name="password2" required></label>
+  <button type="submit">Crear cuenta</button>
+</form>
+{% endblock %}

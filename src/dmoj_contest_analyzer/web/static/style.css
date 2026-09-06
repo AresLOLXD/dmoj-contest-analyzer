@@ -1,0 +1,22 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  line-height: 1.5;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #8888;
+}
+header a { font-weight: 600; text-decoration: none; }
+main { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+form { display: grid; gap: 0.75rem; margin: 1rem 0; }
+form.inline { display: inline; margin: 0; }
+label { display: grid; gap: 0.25rem; }
+button { padding: 0.5rem 1rem; cursor: pointer; width: fit-content; }
+.error { color: #b00020; font-weight: 600; }
+.mono { font-family: ui-monospace, monospace; word-break: break-all; }
