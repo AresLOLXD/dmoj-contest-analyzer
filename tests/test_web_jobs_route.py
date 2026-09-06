@@ -3,7 +3,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from dmoj_contest_analyzer.web import auth
+from dmoj_contest_analyzer.web import auth, jobs
 from dmoj_contest_analyzer.web.app import create_app
 from dmoj_contest_analyzer.web.db import connect, migrate, utcnow
 from tests.web_conftest import make_zip
@@ -99,6 +99,33 @@ def test_other_user_cannot_see_job(client, settings):
     r = client.get(f"/jobs/{bob_job}", follow_redirects=False)
     assert r.status_code == 404
     assert bob_job not in r.text or "Error 404" in r.text
+
+
+def test_uncaught_500_still_has_security_headers(settings, monkeypatch):
+    (settings.data_dir / "backends.toml").write_text("")
+    app = create_app(settings, start_worker=False)
+    c = connect(settings.db_path())
+    migrate(c)
+    c.execute(
+        "INSERT INTO users(username,password_hash,token_version,created_at) VALUES (?,?,0,?)",
+        ("alice", auth.hash_password("pw123456"), utcnow()),
+    )
+    c.close()
+
+    def boom(*a, **k):
+        raise RuntimeError("secret internal detail: /data/state.db")
+
+    monkeypatch.setattr(jobs, "get_job", boom)
+
+    with TestClient(app, base_url="https://testserver", raise_server_exceptions=False) as tc:
+        _login(tc)
+        r = tc.get("/jobs/" + "a" * 32, follow_redirects=False)
+    assert r.status_code == 500
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert "default-src 'self'" in r.headers["content-security-policy"]
+    assert "secret internal detail" not in r.text
+    assert "Traceback" not in r.text
 
 
 def test_healthz_unhealthy_without_jar(client):

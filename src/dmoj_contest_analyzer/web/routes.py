@@ -8,6 +8,7 @@ Every ``/jobs/*`` route enforces owner-only access.
 from __future__ import annotations
 
 import hmac
+import os
 import re
 import secrets
 import sqlite3
@@ -143,9 +144,19 @@ async def setup_form(request: Request) -> Response:
     if not token_path.exists():
         token = secrets.token_urlsafe(32)
         token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(token)
-        token_path.chmod(0o600)
-        print(f"[setup] modo de configuración inicial activo. Token: {token}", flush=True)
+        try:
+            # Atomic exclusive create so the token is never briefly world-readable.
+            fd = os.open(token_path, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)
+            try:
+                os.write(fd, token.encode())
+            finally:
+                os.close(fd)
+            print(
+                f"[setup] modo de configuración inicial activo. Token: {token}",
+                flush=True,
+            )
+        except FileExistsError:
+            pass  # a concurrent GET already created it; reuse that token
     _ensure_csrf(request)
     return render("setup.html", request)
 

@@ -103,9 +103,23 @@ def create_app(settings: Settings | None = None, *, start_worker: bool = True) -
 
     @app.exception_handler(HttpError)
     async def _http_error(request, exc: HttpError):
-        return render(
+        response = render(
             "error.html", request, status_code=exc.status_code,
             code=exc.status_code, message=exc.message,
         )
+        response.headers.update(_SECURITY_HEADERS)
+        return response
+
+    @app.exception_handler(Exception)
+    async def _unhandled(request, exc: Exception):
+        # ServerErrorMiddleware wraps outside every user middleware, so an
+        # otherwise-uncaught exception would return a header-less 500. Render a
+        # generic Spanish page (no internal detail) with the security headers.
+        response = render(
+            "error.html", request, status_code=500,
+            code=500, message="Ocurrió un error interno. Intenta de nuevo más tarde.",
+        )
+        response.headers.update(_SECURITY_HEADERS)
+        return response
 
     return app
