@@ -2,45 +2,44 @@
 # api_key_env variable is set to a non-empty value in the environment.
 
 [[backend]]
-id = "ollama"
-label = "Ollama (local)"
-base_url = "http://localhost:11434/v1"
-models = ["qwen2.5-coder:7b", "llama3.1:8b"]
+id                       = "ollama"
+label                    = "Ollama (host)"
+base_url                 = "http://host.docker.internal:11434/v1"
+models                   = ["qwen2.5-coder:7b", "llama3.1:8b"]   # lista estática en v1
 supports_response_format = true
-enabled = true
+enabled                  = true
 
 [[backend]]
-id = "openai"
-label = "OpenAI"
-base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
-models = ["gpt-4o", "gpt-4o-mini"]
+id                       = "lmstudio"
+label                    = "LM Studio (host)"
+base_url                 = "http://host.docker.internal:1234/v1"
+models                   = ["qwen2.5-coder-7b-instruct"]
 supports_response_format = true
-enabled = true
+enabled                  = true
 
 [[backend]]
-id = "anthropic"
-label = "Anthropic (Claude)"
-base_url = "https://api.anthropic.com/v1"
-api_key_env = "ANTHROPIC_API_KEY"
-models = ["claude-sonnet-5", "claude-3-5-haiku"]
-supports_response_format = false
-enabled = true
+id                       = "openai"
+label                    = "OpenAI"
+base_url                 = "https://api.openai.com/v1"
+api_key_env              = "OPENAI_API_KEY"
+models                   = ["gpt-4o", "gpt-4o-mini"]
+supports_response_format = true
+enabled                  = true
 
 [[backend]]
-id = "gemini"
-label = "Google Gemini"
-base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
-api_key_env = "GEMINI_API_KEY"
-models = ["gemini-2.0-flash", "gemini-1.5-pro"]
-supports_response_format = true
-enabled = true
+id                       = "claude"
+label                    = "Claude"
+base_url                 = "https://api.anthropic.com/v1"
+api_key_env              = "ANTHROPIC_API_KEY"
+models                   = ["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"]
+supports_response_format = false           # el endpoint compat ignora response_format
+enabled                  = true
 
 [[backend]]
-id = "deepseek"
-label = "DeepSeek"
-base_url = "https://api.deepseek.com/v1"
-api_key_env = "DEEPSEEK_API_KEY"
-models = ["deepseek-chat", "deepseek-reasoner"]
+id                       = "gemini"
+label                    = "Gemini"
+base_url                 = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key_env              = "GEMINI_API_KEY"
+models                   = ["gemini-2.0-flash"]   # 2.5-pro trunca con pocos tokens
 supports_response_format = true
-enabled = true
+enabled                  = true

@@ -72,5 +72,6 @@ def test_redact():
 
 def test_example_toml_parses():
     path = Path(__file__).resolve().parent.parent / "backends.example.toml"
-    b = load_backends(path, env={})
-    assert any(x.id == "ollama" for x in b)
+    env = {"OPENAI_API_KEY": "x", "ANTHROPIC_API_KEY": "x", "GEMINI_API_KEY": "x"}
+    b = load_backends(path, env=env)
+    assert {x.id for x in b} == {"ollama", "lmstudio", "openai", "claude", "gemini"}
