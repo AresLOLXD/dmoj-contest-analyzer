@@ -21,6 +21,7 @@ web = [
 
 [project.scripts]
 dmoj-contest-analyzer = "dmoj_contest_analyzer.cli:main"
+dmoj-manage-users = "dmoj_contest_analyzer.users_cli:main"
 
 [project.urls]
 Repository = "https://github.com/AresLOLXD/dmoj-contest-analyzer"
