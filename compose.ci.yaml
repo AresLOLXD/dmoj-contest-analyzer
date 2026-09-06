@@ -1,0 +1,13 @@
+# CI override: `docker compose -f compose.yaml -f compose.ci.yaml up`.
+# Uses a named volume for /data (inherits image perms, no host chown needed) and
+# a baked config file so there is no host bind mount to prepare.
+services:
+  analyzer:
+    volumes:
+      - data:/data
+      - ./backends.example.toml:/config/backends.toml:ro
+    environment:
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set it}
+
+volumes:
+  data: {}

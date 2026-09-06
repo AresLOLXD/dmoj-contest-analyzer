@@ -13,3 +13,7 @@ jplag_input/
 reporte.csv
 
 .claude/worktrees/
+
+vendor/
+/data/
+backends.toml

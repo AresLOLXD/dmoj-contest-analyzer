@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+# BuildKit is required (cache mounts, bind mounts, --chmod on COPY).
+
+# --- JRE 21 (Debian bookworm has NO openjdk-21; JPlag 6.3.0 needs Java 21) ---
+FROM eclipse-temurin:21-jre-jammy AS jre
+
+# --- build ---
+# renovate: datasource=docker depName=python versioning=docker
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS build
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+WORKDIR /app
+# Dependency layer: resolves + installs only third-party deps, cached until the
+# lockfile or pyproject changes.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --no-dev --extra web --no-install-project
+COPY . /app
+# Project layer: installs the package itself into the venv (non-editable copy).
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --extra web --no-editable
+
+# --- runtime ---
+# Same digest pin as `build`: the copied .venv breaks if the interpreter differs.
+# renovate: datasource=docker depName=python versioning=docker
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+COPY --from=jre /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk \
+    PATH="/opt/java/openjdk/bin:/app/.venv/bin:$PATH" \
+    HOME=/tmp XDG_CACHE_HOME=/tmp/.cache \
+    JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=/tmp -Djava.util.prefs.userRoot=/tmp/.java -XX:MaxRAMPercentage=45 -XX:ActiveProcessorCount=1" \
+    JPLAG_JAR=/opt/jplag/jplag.jar
+# Vendored jar copied BEFORE `COPY --from=build ... /app/src` so a code change
+# does not re-copy 83 MB.
+COPY --chmod=0644 vendor/jplag-6.3.0-jar-with-dependencies.jar /opt/jplag/jplag.jar
+COPY --from=build /app/.venv /app/.venv
+COPY --from=build /app/src /app/src
+RUN useradd -u 10001 -m appuser && mkdir -p /data && chown 10001:10001 /data
+USER 10001:10001
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').status==200 else 1)"
+CMD ["uvicorn", "dmoj_contest_analyzer.web.app:create_app", "--factory", \
+     "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

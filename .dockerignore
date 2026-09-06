@@ -1,0 +1,19 @@
+# Keep the build context small and deterministic.
+estatal2026d1mxcdmx.zip
+jplag_input/
+reporte.xlsx
+*.xlsx
+.~lock.*
+
+.git
+docs/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.superpowers/
+.claude/
+
+# Exclude every jar except the vendored JPlag one the Dockerfile COPYs.
+**/*.jar
+!vendor/

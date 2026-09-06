@@ -1,0 +1,36 @@
+# Local / single-host deployment. TLS is terminated by a reverse proxy in front.
+# Before the first `up`: `mkdir -p ./data && sudo chown -R 10001:10001 ./data`
+# (otherwise the app hits EACCES creating state.db). See README.
+services:
+  analyzer:
+    build: .
+    image: dmoj-contest-analyzer:local
+    user: "10001:10001"
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      APP_SECRET_KEY: ${APP_SECRET_KEY:?set it}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DATA_DIR: /data
+      BACKENDS_CONFIG: /config/backends.toml
+      # Zip extraction lands on the disk volume, not RAM. The job dir is created
+      # under /data by upload.py/worker.py, so /data/tmp is materialised there.
+      TMPDIR: /data/tmp
+    volumes:
+      - ./data:/data
+      - ./backends.toml:/config/backends.toml:ro
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777,noexec,nosuid,nodev
+      - /home/appuser:uid=10001,gid=10001,size=32m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    # Non-swarm keys; `deploy.resources` is ignored by `docker compose up`.
+    mem_limit: 2g
+    mem_reservation: 512m
+    cpus: 2.0
+    pids_limit: 512
+    ulimits: { nofile: 4096 }
+    restart: unless-stopped
