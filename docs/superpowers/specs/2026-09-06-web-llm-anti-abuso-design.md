@@ -13,7 +13,7 @@ Este diseño agrega:
 
 1. Un módulo `llm.py` que usa un LLM como **juez de estilo** para estimar la
    probabilidad de que un envío sea generado por IA. Independiente de proveedor
-   (Claude, OpenAI, Gemini, o LLM local vía Ollama/vLLM), vía API compatible con
+   (Claude, OpenAI, Gemini, o LLM local vía Ollama/LM Studio), vía API compatible con
    OpenAI. Opcional: sin configurarlo, nada cambia.
 2. Un subpaquete `web/` con interfaz web autohospedable (subir `.zip` → descargar
    `.xlsx`), para un grupo chico y conocido (un jurado), exponible a internet
@@ -39,7 +39,7 @@ Las reglas de puntuación viven en la imagen, no en configuración.
 
 - No es un SaaS multiusuario con registro abierto.
 - No emite veredictos de plagio ni de uso de IA.
-- No hospeda ni empaqueta Ollama/vLLM: son servicios del host, referenciados por URL.
+- No hospeda ni empaqueta Ollama/LM Studio: son servicios del host, referenciados por URL.
 - No implementa OAuth/OIDC.
 
 ## Recortes para v1 (§10 detalla el porqué)
@@ -268,10 +268,10 @@ supports_response_format = true
 enabled                = true
 
 [[backend]]
-id                     = "vllm"
-label                  = "vLLM (host)"
-base_url               = "http://host.docker.internal:8000/v1"
-models                 = ["Qwen/Qwen2.5-Coder-7B-Instruct"]
+id                     = "lmstudio"
+label                  = "LM Studio (host)"
+base_url               = "http://host.docker.internal:1234/v1"
+models                 = ["qwen2.5-coder-7b-instruct"]
 supports_response_format = true
 enabled                = true
 
@@ -326,7 +326,7 @@ acotado (`min(4, ...)`).
   solo `gemini-2.0-flash`.
 - **OpenAI**: modelos de razonamiento rechazan `temperature≠default`; la lista v1
   (`gpt-4o*`) no. Si un 400 menciona `temperature`, reintento sin él.
-- **Ollama / vLLM**: OK; `response_format={"type":"json_object"}` soportado.
+- **Ollama / LM Studio**: OK; `response_format={"type":"json_object"}` soportado.
 
 ### `GET /api/models`
 
@@ -567,12 +567,12 @@ services:
   (hereda perms de la imagen).
 - **`backends.toml` `chmod 644`** para que uid 10001 lo lea.
 
-### Red hacia Ollama/vLLM del host
+### Red hacia Ollama/LM Studio del host
 
 Viven en el host, compartidos. El fallo más común **no** es el firewall: Ollama
 escucha en `127.0.0.1:11434` por defecto y `host.docker.internal` llega por la
 interfaz *gateway*, no loopback. El README exige:
-- `OLLAMA_HOST=0.0.0.0` (o bind al IP del bridge `172.17.0.1`) y vLLM
+- `OLLAMA_HOST=0.0.0.0` (o bind al IP del bridge `172.17.0.1`) y LM Studio
   `--host 0.0.0.0`;
 - regla de firewall que permita solo `172.16.0.0/12` → puertos 11434/8000;
 - `host-gateway` requiere Docker ≥ 20.10; Podman 4.7+ lo añade solo.
@@ -802,7 +802,7 @@ Dev: `respx`, `pytest-asyncio`.
   poblado por CI (deterministico, sin BuildKit-dependency para el jar, sin
   depender de disponibilidad de la release).
 - **`host.docker.internal` en Linux**: depende de `host-gateway` (Docker 20.10+)
-  y de que Ollama/vLLM escuchen en `0.0.0.0`. Documentado; `network_mode: host`
+  y de que Ollama/LM Studio escuchen en `0.0.0.0`. Documentado; `network_mode: host`
   como último recurso desaconsejado.
 - **Observabilidad**: v1 loguea transiciones de estado de jobs y eventos de auth
   a stdout estructurado. Sin métricas ni tracing en v1.
