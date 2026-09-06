@@ -11,3 +11,5 @@ build/
 jplag_input/
 /*.zip
 reporte.csv
+
+.claude/worktrees/
