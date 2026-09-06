@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+pytest_plugins = ["tests.web_conftest"]
+
 # One AC per user on p1 so z-score has >2 samples; p2 has a retry case.
 _FILES = {
     "userA/p1/1_userA_2026-01-01_10-00-00_AC.cpp": "// solA\nint main(){return 0;}\n",
