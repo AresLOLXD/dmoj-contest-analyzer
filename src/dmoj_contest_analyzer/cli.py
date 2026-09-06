@@ -15,17 +15,8 @@ import argparse
 import os
 from pathlib import Path
 
+from dmoj_contest_analyzer.analysis import AnalysisOptions, NoSubmissionsError, run_analysis
 from dmoj_contest_analyzer.ingest import resolve_export
-from dmoj_contest_analyzer.jplag import (
-    find_existing_jplag_results,
-    merge_jplag_into_main,
-    parse_jplag_result,
-    prepare_jplag_input,
-    run_jplag,
-)
-from dmoj_contest_analyzer.report import write_excel_report
-from dmoj_contest_analyzer.submissions import parse_submissions
-from dmoj_contest_analyzer.timing import analyze_timing_style
 
 _JPLAG_RELEASES = "https://github.com/jplag/JPlag/releases"
 
@@ -73,47 +64,29 @@ def main() -> None:
         jplag_jar = _resolve_jplag_jar(args.jplag_jar)
 
     with resolve_export(args.entrada) as root:
-        subs = parse_submissions(root)
-        if not subs:
+        try:
+            data = run_analysis(
+                root,
+                args.out,
+                AnalysisOptions(
+                    jplag_out=args.jplag_out,
+                    run_jplag=args.run_jplag,
+                    jplag_solo_ac=args.jplag_solo_ac,
+                    jplag_jar=jplag_jar,
+                ),
+                on_progress=lambda _: None,
+            )
+        except NoSubmissionsError:
             print("No se encontraron archivos que coincidan con el patrón esperado.")
             return
 
-        n_users = len(set(s.username for s in subs))
-        n_problems = len(set(s.problem for s in subs))
         print(
-            f"{len(subs)} submissions encontradas de {n_users} usuarios "
-            f"en {n_problems} problemas."
+            f"{data.n_subs} submissions encontradas de {data.n_users} usuarios "
+            f"en {data.n_problems} problemas."
         )
-
-        main_rows = analyze_timing_style(subs)
-
-        jplag_rows = []
-        if args.jplag_out is not None:
-            if args.run_jplag:
-                counts = prepare_jplag_input(subs, args.jplag_out, args.jplag_solo_ac)
-                print(f"\nEstructura de JPlag creada en: {args.jplag_out.resolve()}")
-                print("\n--- JPlag ---")
-                jplag_results = run_jplag(args.jplag_out, counts, jplag_jar)
-            else:
-                jplag_results = find_existing_jplag_results(args.jplag_out)
-                print(f"\nReutilizando {len(jplag_results)} resultado(s) .jplag ya existentes "
-                      f"en {args.jplag_out}")
-
-            print("\n--- Parseando resultados de JPlag ---")
-            for problem, lang, jplag_file in jplag_results:
-                rows = parse_jplag_result(problem, lang, jplag_file)
-                print(f"  {jplag_file.name}: {len(rows)} comparaciones extraídas")
-                jplag_rows.extend(rows)
-
-            if jplag_rows:
-                merge_jplag_into_main(main_rows, jplag_rows)
-            else:
-                print("\n[!] No se extrajo ninguna comparación de JPlag. El Excel se genera solo "
-                      "con timing/estilo.")
-
-        write_excel_report(main_rows, jplag_rows, args.out, len(subs), n_users, n_problems)
         print(f"\nReporte escrito en {args.out.resolve()}")
 
+        main_rows = data.main_rows
         top = [r for r in main_rows if r["score_sospecha"] >= 2]
         print(f"\n{len(top)} casos con score_sospecha >= 2 (revisión manual prioritaria):")
         for r in sorted(top, key=lambda r: -r["score_sospecha"])[:20]:

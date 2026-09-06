@@ -1,5 +1,6 @@
 from openpyxl import load_workbook
 
+from dmoj_contest_analyzer.analysis import ReportData
 from dmoj_contest_analyzer.report import write_excel_report
 
 
@@ -18,10 +19,12 @@ def _main_row(**over):
 
 def test_writes_three_sheets(tmp_path):
     out = tmp_path / "r.xlsx"
-    write_excel_report([_main_row()], [
-        {"problema": "p1", "lenguaje": "cpp", "usuario_a": "userA",
-         "usuario_b": "userC", "similitud": 80.0}
-    ], out, n_subs=6, n_users=3, n_problems=2)
+    write_excel_report(ReportData(
+        [_main_row()],
+        [{"problema": "p1", "lenguaje": "cpp", "usuario_a": "userA",
+          "usuario_b": "userC", "similitud": 80.0}],
+        6, 3, 2,
+    ), out)
     wb = load_workbook(out)
     assert wb.sheetnames == ["Resumen", "Timing y Estilo", "JPlag - Pares"]
     assert wb["Timing y Estilo"]["A2"].value == "userA"

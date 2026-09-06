@@ -21,7 +21,9 @@ def _write_sheet(ws, headers, rows):
         ws.column_dimensions[get_column_letter(i)].width = min(max_len + 2, 45)
 
 
-def write_excel_report(main_rows, jplag_rows, out_path: Path, n_subs, n_users, n_problems):
+def write_excel_report(data, out_path: Path):
+    main_rows, jplag_rows = data.main_rows, data.jplag_rows
+    n_subs, n_users, n_problems = data.n_subs, data.n_users, data.n_problems
     wb = Workbook()
 
     ws_resumen = wb.active
