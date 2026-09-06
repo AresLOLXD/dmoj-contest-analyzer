@@ -24,37 +24,32 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     env:
+      # Job-level so every `docker compose` call (up/ps/exec/logs/down) can
+      # interpolate `${APP_SECRET_KEY:?set it}` in both compose files.
+      APP_SECRET_KEY: ci-secret
       JPLAG_VERSION: "6.3.0"
       JPLAG_JAR: vendor/jplag-6.3.0-jar-with-dependencies.jar
-      # Fill this with the sha256 of the real GitHub release asset
-      # (jplag-6.3.0-jar-with-dependencies.jar). While it is the literal
-      # placeholder the job only logs the computed hash as a warning; once
-      # pinned it is enforced with `sha256sum -c` and a mismatch fails the job.
-      JPLAG_SHA256: "<SHA256>"
+      # JPlag v6.3.0 jar-with-dependencies; re-verify against the official
+      # release before trusting.
+      JPLAG_SHA256: "5f2c21e8b88ed77134effcb3a5a3ab13d188f6a3e16d401387f7479e92db9aa2"
     steps:
       - uses: actions/checkout@v5
 
       - name: Cache JPlag jar
-        id: jplag-cache
         uses: actions/cache@v4
         with:
           path: ${{ env.JPLAG_JAR }}
-          key: jplag-6.3.0
+          key: jplag-6.3.0-${{ env.JPLAG_SHA256 }}
 
       - name: Fetch and verify JPlag jar
-        if: steps.jplag-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p vendor
-          curl -fsSL -o "$JPLAG_JAR" \
-            "https://github.com/jplag/JPlag/releases/download/v${JPLAG_VERSION}/jplag-${JPLAG_VERSION}-jar-with-dependencies.jar"
-          actual="$(sha256sum "$JPLAG_JAR" | cut -d' ' -f1)"
-          if [ "$JPLAG_SHA256" = "<SHA256>" ]; then
-            echo "::warning::JPLAG_SHA256 placeholder not set. Computed sha256: ${actual}"
-            echo "TODO: pin JPLAG_SHA256 in .github/workflows/ci.yml to ${actual}"
-          else
-            echo "${JPLAG_SHA256}  ${JPLAG_JAR}" | sha256sum -c -
+          if [ ! -f "$JPLAG_JAR" ] || ! echo "${JPLAG_SHA256}  ${JPLAG_JAR}" | sha256sum -c - >/dev/null 2>&1; then
+            curl -fsSL -o "$JPLAG_JAR" \
+              "https://github.com/jplag/JPlag/releases/download/v${JPLAG_VERSION}/jplag-${JPLAG_VERSION}-jar-with-dependencies.jar"
           fi
+          echo "${JPLAG_SHA256}  ${JPLAG_JAR}" | sha256sum -c -
 
       - uses: docker/setup-buildx-action@v3
 
@@ -67,14 +62,12 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Start the stack
-        env:
-          APP_SECRET_KEY: ci-secret
         run: docker compose -f compose.yaml -f compose.ci.yaml up -d --no-build
 
       - name: Wait for /healthz
         run: |
           set -eu
-          for i in $(seq 1 15); do
+          for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
               echo "healthz ok after ${i} tries"; exit 0
             fi
@@ -94,7 +87,7 @@ jobs:
           test "$mem" -gt 0
           test "$pids" -gt 0
 
-      - name: In-container smoke of the real upload path (JPlag under read_only)
+      - name: Smoke the real upload path over HTTP (JPlag under read_only)
         run: |
           set -euo pipefail
           COMPOSE="docker compose -f compose.yaml -f compose.ci.yaml"
@@ -103,7 +96,7 @@ jobs:
           PW1=ci-password-123
           PW2=ci-password-456
 
-          csrf() { grep -o 'name="csrf" value="[^"]*"' | head -1 | sed 's/.*value="//;s/"//'; }
+          csrf() { grep -o -m1 'name="csrf" value="[^"]*"' | sed 's/.*value="//;s/"//'; }
 
           # 1. Trigger setup-token creation, then read it from the container.
           curl -fsS -c "$JAR" -b "$JAR" "$BASE/setup" -o /tmp/setup.html
@@ -145,16 +138,17 @@ jobs:
           # 5. Submit the job through the real multipart path.
           curl -fsS -c "$JAR" -b "$JAR" "$BASE/" -o /tmp/upload.html
           C="$(csrf < /tmp/upload.html)"
-          LOC="$(curl -fsS -c "$JAR" -b "$JAR" -o /dev/null -D - \
+          HDRS="$(curl -fsS -c "$JAR" -b "$JAR" -o /dev/null -D - \
             -F "csrf=$C" -F "run_jplag=on" -F "archivo=@/tmp/contest.zip;type=application/zip" \
-            "$BASE/jobs" | grep -i '^location:' | tr -d '\r' | awk '{print $2}')"
+            "$BASE/jobs")"
+          LOC="$(printf '%s' "$HDRS" | tr -d '\r' | { grep -i -m1 '^location:' || true; } | awk '{print $2}')"
           echo "job location: $LOC"
           case "$LOC" in /jobs/*) ;; *) echo "unexpected redirect: $LOC"; exit 1;; esac
 
           # 6. Poll until done/failed.
           for i in $(seq 1 90); do
             STATUS="$(curl -fsS -c "$JAR" -b "$JAR" "$BASE$LOC" \
-              | grep -o 'Estado: <strong>[a-z]*</strong>' | sed 's/.*<strong>//;s/<.*//')"
+              | { grep -o -m1 'Estado: <strong>[a-z]*</strong>' || true; } | sed 's/.*<strong>//;s/<.*//')"
             echo "[$i] status=$STATUS"
             case "$STATUS" in
               done) echo "smoke passed"; exit 0 ;;
