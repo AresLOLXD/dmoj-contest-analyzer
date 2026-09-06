@@ -1,6 +1,9 @@
+import httpx
 import pytest
+import respx
 
 from dmoj_contest_analyzer.analysis import AnalysisOptions, NoSubmissionsError, run_analysis
+from dmoj_contest_analyzer.llm import BackendSpec
 from tests.test_cli_golden import read_xlsx_values
 
 
@@ -13,6 +16,21 @@ def test_run_analysis_matches_cli_output(mini_export_tree, tmp_path):
     ts = {(r["usuario"], r["problema"]): r for r in values["Timing y Estilo"]}
     assert ts[("userC", "p1")]["score_sospecha"] == 2
     assert any("envío" in m or "envio" in m for m in msgs)
+
+
+@respx.mock
+def test_run_analysis_runs_llm_judge(mini_export_tree, tmp_path):
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content":
+            '{"ai_score": 77, "señales": ["comentarios tutorial"], "nota": "revisar"}'}}]})
+    )
+    spec = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
+    out = tmp_path / "r.xlsx"
+    data = run_analysis(mini_export_tree, out, AnalysisOptions(), llm=(spec, "gpt-4o"))
+    assert data.llm_model == "openai|gpt-4o"
+    assert data.llm_rows and all(r["ai_score"] == 77 for r in data.llm_rows)
+    assert all(r["llm_ai_score"] == 77 for r in data.main_rows)
+    assert all(r["llm_modelo"] == "openai|gpt-4o" for r in data.main_rows)
 
 
 def test_run_analysis_no_submissions_raises(tmp_path):

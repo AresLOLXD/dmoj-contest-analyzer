@@ -3,6 +3,7 @@ import pytest
 import respx
 
 from dmoj_contest_analyzer.llm import BackendSpec, JudgeItem, judge_one
+from dmoj_contest_analyzer.web.llm_run import run_judge
 
 SPEC = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
 ITEM = JudgeItem(("u", "p"), "p", "cpp", "int main(){}")
@@ -56,3 +57,21 @@ def test_judge_one_truncates_source():
     with httpx.Client() as c:
         judge_one(c, SPEC, "gpt-4o", big, max_tokens=1500, max_source_bytes=100)
     assert captured["body"].count("x") <= 120
+
+
+@respx.mock
+def test_run_judge_stops_when_on_call_false():
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=_chat('{"ai_score": 5, "señales": [], "nota": ""}')
+    )
+    spec = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
+    items = [JudgeItem((f"u{i}", "p"), "p", "cpp", "x") for i in range(5)]
+    calls = {"n": 0}
+
+    def on_call():
+        calls["n"] += 1
+        return calls["n"] <= 2
+
+    results = run_judge(items, spec, "gpt-4o", max_tokens=100, max_source_bytes=100,
+                        max_workers=1, on_call=on_call)
+    assert len(results) == 2

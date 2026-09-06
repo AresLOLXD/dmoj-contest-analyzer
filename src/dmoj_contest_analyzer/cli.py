@@ -17,6 +17,7 @@ from pathlib import Path
 
 from dmoj_contest_analyzer.analysis import AnalysisOptions, NoSubmissionsError, run_analysis
 from dmoj_contest_analyzer.ingest import resolve_export
+from dmoj_contest_analyzer.llm import BackendSpec, load_backends, resolve
 
 _JPLAG_RELEASES = "https://github.com/jplag/JPlag/releases"
 
@@ -40,7 +41,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--run-jplag", action="store_true",
         help="Ejecuta JPlag (si no se pasa, se reutilizan *_resultado.jplag existentes)",
     )
+    ap.add_argument("--run-llm", action="store_true",
+                    help="Evalúa cada envío con un LLM para estimar si fue generado por IA")
+    ap.add_argument("--llm-model", type=str, default=None,
+                    help="Modelo a usar en formato 'backend|modelo' (p. ej. 'openai|gpt-4o')")
+    ap.add_argument("--backends-config", type=Path, default=Path("backends.toml"),
+                    help="Archivo TOML con la definición de backends de LLM")
     return ap
+
+
+def _resolve_llm(config_path: Path, model_ref: str | None) -> tuple[BackendSpec, str]:
+    if not model_ref:
+        raise SystemExit("Se pidió --run-llm pero falta --llm-model 'backend|modelo'.")
+    if not config_path.is_file():
+        raise SystemExit(f"No existe el archivo de backends: {config_path}")
+    try:
+        backends = load_backends(config_path)
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(f"No se pudo leer {config_path}: {exc}") from exc
+    try:
+        return resolve(model_ref, backends)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _resolve_jplag_jar(cli_value: str | None) -> str:
@@ -63,6 +85,10 @@ def main() -> None:
     if args.jplag_out is not None and args.run_jplag:
         jplag_jar = _resolve_jplag_jar(args.jplag_jar)
 
+    llm = None
+    if args.run_llm:
+        llm = _resolve_llm(args.backends_config, args.llm_model)
+
     with resolve_export(args.entrada) as root:
         try:
             data = run_analysis(
@@ -75,6 +101,7 @@ def main() -> None:
                     jplag_jar=jplag_jar,
                 ),
                 on_progress=print,
+                llm=llm,
             )
         except NoSubmissionsError:
             print("No se encontraron archivos que coincidan con el patrón esperado.")
