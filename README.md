@@ -24,6 +24,11 @@ requieren evidencia adicional.
   - Java 21 o superior en el `PATH` (lo exige JPlag 6.x)
   - El `.jar` de JPlag, que **no viene incluido**: descárgalo de
     <https://github.com/jplag/JPlag/releases>
+- El CLI `dmoj-contest-analyzer` no necesita nada nuevo para timing/estilo/JPlag.
+- Solo si vas a usar el juez LLM (`--run-llm`): un endpoint compatible con la API
+  de OpenAI accesible (Ollama, LM Studio, OpenAI, etc.).
+- Solo para la interfaz web (opcional): **Docker** y **Docker Compose**. Java y el
+  `.jar` de JPlag ya vienen dentro de la imagen.
 
 ## Instalación
 
@@ -46,6 +51,9 @@ dmoj-contest-analyzer ENTRADA [--out reporte.xlsx]
                               [--jplag-solo-ac]
                               [--jplag-jar RUTA]
                               [--run-jplag]
+                              [--run-llm]
+                              [--llm-model BACKEND|MODELO]
+                              [--backends-config RUTA]
 ```
 
 | Flag | Descripción |
@@ -56,6 +64,9 @@ dmoj-contest-analyzer ENTRADA [--out reporte.xlsx]
 | `--jplag-solo-ac` | Al preparar JPlag, usa solo el último AC de cada usuario |
 | `--jplag-jar` | Ruta al `.jar` de JPlag (o variable de entorno `JPLAG_JAR`) |
 | `--run-jplag` | Ejecuta JPlag; si se omite, se reutilizan los `*_resultado.jplag` existentes |
+| `--run-llm` | Evalúa con un LLM el primer AC de cada `(usuario, problema)` para estimar si fue generado por IA |
+| `--llm-model` | Modelo a usar en formato `backend|modelo`, con `|` como separador (p. ej. `openai|gpt-4o`, `ollama|qwen2.5-coder:7b`). Obligatorio con `--run-llm` |
+| `--backends-config` | TOML con la definición de backends (por defecto `backends.toml`) |
 
 ### 1. Solo timing y estilo, desde el `.zip`
 
@@ -86,6 +97,79 @@ Si ya corriste JPlag antes y la carpeta contiene los `*_resultado.jplag`, omite
 ```bash
 uv run dmoj-contest-analyzer export.zip --out reporte.xlsx --jplag-out jplag_input
 ```
+
+### 4. Añadir el juez LLM
+
+```bash
+export OPENAI_API_KEY=sk-...
+uv run dmoj-contest-analyzer export.zip --out reporte.xlsx \
+    --run-llm --llm-model 'openai|gpt-4o'
+```
+
+El `backend` (`openai`, `ollama`, `claude`, ...) se define en `backends.toml`
+(parte de `backends.example.toml`). Para un modelo local basta con que el backend
+apunte a la URL correcta; no hace falta API key.
+
+**Advertencia sobre el juez LLM.** Produce una **señal de priorización, no un
+veredicto**. Es **influenciable adversarialmente**: un participante puede meter
+texto en un comentario para bajar su propio `llm_ai_score`. Nunca debe ser el
+único motivo de una revisión. No es determinista. Cuesta ~1 llamada al modelo por
+cada `(usuario, problema)` con AC.
+
+## Despliegue web (opcional)
+
+La interfaz web es **opcional**: el CLI sigue funcionando por sí solo. Sirve para
+que un jurado suba el `.zip` desde el navegador y descargue el reporte, con
+autenticación y límites de abuso.
+
+**Requisitos:** Docker y Docker Compose. Java y JPlag ya vienen en la imagen.
+
+### Puesta en marcha
+
+```bash
+cp backends.example.toml backends.toml       # y edítalo: modelos, URLs, backends
+export APP_SECRET_KEY=$(openssl rand -hex 32)
+mkdir -p data && sudo chown -R 10001:10001 data   # uid del contenedor; si no, EACCES al crear la DB
+docker compose up -d
+```
+
+### Primer arranque
+
+Sin usuarios, solo `/setup` responde. El token (de un solo uso) se imprime en
+`docker compose logs` y se escribe en `./data/setup_token`. Con él creas el primer
+usuario; el primer login te obliga a cambiar la contraseña.
+
+### Gestión de usuarios
+
+```bash
+docker compose exec analyzer dmoj-manage-users add <usuario>
+```
+
+También `disable`, `enable`, `reset-password` y `list`.
+
+### LLM local en el host (Ollama / LM Studio)
+
+Deben escuchar en `0.0.0.0`, **no** en loopback:
+
+- Ollama: `OLLAMA_HOST=0.0.0.0`.
+- LM Studio: pestaña "Server" → activar "Serve on Local Network".
+
+El contenedor los alcanza por `host.docker.internal` (ya configurado en
+`compose.yaml`; requiere Docker ≥ 20.10 en Linux). Si el host tiene firewall,
+permite la subred de Docker (`172.16.0.0/12`) hacia los puertos `11434` (Ollama) y
+`1234` (LM Studio). `backends.toml` ya trae esas URLs.
+
+### Exponer a internet
+
+El contenedor publica solo en `127.0.0.1:8000`. Pon delante un reverse proxy que
+termine TLS (Caddy, nginx, Traefik). Ver `Caddyfile.example`.
+
+### Anti-abuso (resumen)
+
+Autenticación obligatoria, límite de tamaño de subida, rate limit y cupos por
+usuario, timeout por trabajo, y retención efímera: los `.zip` se borran al
+terminar y los reportes a las ~12 h. El contenedor está endurecido: no-root,
+rootfs de solo lectura y sin capabilities.
 
 ## Entrada esperada
 
@@ -137,6 +221,11 @@ suma `1` por cada condición que se cumpla:
 Se marca como **alerta para revisión manual prioritaria** cuando
 `score_sospecha >= 2`.
 
+Si se corrió el juez LLM, las columnas `llm_ai_score` y `llm_modelo` son
+**columnas separadas para ordenar**: **NO suman al `score_sospecha`**, que sigue
+en el rango `0-4`. El detalle (señales detectadas y la nota del modelo) va en la
+hoja `LLM - Notas`.
+
 ## Limitaciones conocidas
 
 - **Parser del reporte `.jplag`**: se lee el formato de la serie **6.x** de
@@ -151,6 +240,11 @@ Se marca como **alerta para revisión manual prioritaria** cuando
 - Las métricas de estilo (comentarios, longitud de identificadores) están
   calibradas para C/C++, Python y Java; otros lenguajes se procesan con reglas
   aproximadas.
+- **Juez LLM**: sesgo a falsos positivos con plantillas de competitive
+  programming y estudiantes prolijos; es influenciable por el contenido del
+  envío (ver "Uso"). No es determinista y no es evidencia.
+- El endpoint compatible con OpenAI de Anthropic (backend `claude`) es **beta**.
+- En Linux, `host.docker.internal` requiere Docker ≥ 20.10.
 
 ## Desarrollo
 

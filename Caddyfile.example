@@ -1,0 +1,19 @@
+# Copy to Caddyfile and replace analiza.example.org with your real domain.
+# Caddy obtains and renews a TLS certificate automatically (needs ports 80/443
+# reachable and a valid DNS A/AAAA record).
+#
+# The container only listens on 127.0.0.1:8000; this proxy is the public entry
+# point. Optionally restrict access by uncommenting one of the blocks below.
+
+analiza.example.org {
+	reverse_proxy 127.0.0.1:8000
+
+	# Extra login on top of the app's own auth:
+	# basic_auth {
+	#     jurado $2a$14$replace_with_output_of_caddy_hash-password
+	# }
+
+	# Or allow only known IPs:
+	# @blocked not remote_ip 203.0.113.0/24 198.51.100.10
+	# respond @blocked "Forbidden" 403
+}
