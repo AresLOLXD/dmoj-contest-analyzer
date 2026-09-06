@@ -1,8 +1,6 @@
 import statistics
 from collections import defaultdict
 
-from dmoj_contest_analyzer.submissions import Submission  # noqa: F401
-
 
 def analyze_timing_style(subs):
     by_user_problem = defaultdict(list)
