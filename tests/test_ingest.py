@@ -1,3 +1,4 @@
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -9,6 +10,13 @@ from dmoj_contest_analyzer.submissions import parse_submissions
 
 def test_resolve_plain_folder(mini_export_tree):
     with resolve_export(mini_export_tree) as root:
+        assert len(parse_submissions(root)) == 6
+
+
+def test_resolve_plain_folder_with_wrapper(tmp_path, mini_export_tree):
+    shutil.copytree(mini_export_tree, tmp_path / "wrapper")
+    with resolve_export(tmp_path) as root:
+        assert root.name == "wrapper"
         assert len(parse_submissions(root)) == 6
 
 

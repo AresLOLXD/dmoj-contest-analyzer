@@ -17,6 +17,11 @@ def test_single_attempt_flag_and_score(mini_export_tree):
     assert a_p1["un_solo_intento"] is True
     assert b_p1["un_solo_intento"] is False  # AC on attempt 2
     assert a_p1["intentos_antes_de_AC"] == 0
+    # userA/p1: un_solo_intento (+1); comment_ratio 0.5 > 0.15 (+1);
+    # z ~= -0.71 (not < -1.0) -> no bonus. Total 2.
+    assert a_p1["score_sospecha"] == 2
+    # userB/p1: AC on attempt 2 (no single-attempt); no comments; z positive. Total 0.
+    assert b_p1["score_sospecha"] == 0
 
 
 def test_zscore_present_with_three_samples(mini_export_tree):
