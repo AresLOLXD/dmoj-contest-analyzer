@@ -16,4 +16,4 @@ __pycache__/
 
 # Exclude every jar except the vendored JPlag one the Dockerfile COPYs.
 **/*.jar
-!vendor/
+!vendor/**
