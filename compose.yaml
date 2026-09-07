@@ -27,7 +27,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=512m,mode=1777,noexec,nosuid,nodev
-      - /home/appuser:uid=10001,gid=10001,size=32m
+      # No uid=/gid= here: podman rejects them on tmpfs, and they are not needed
+      # -- tmpfs mounts 1777 so uid 10001 can write, and HOME is /tmp anyway.
+      - /home/appuser:size=32m,mode=1777
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     # Non-swarm keys; `deploy.resources` is ignored by `docker compose up`.
