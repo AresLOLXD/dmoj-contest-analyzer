@@ -36,8 +36,9 @@ def create_job(
     run_jplag: bool,
     jplag_solo_ac: bool,
     settings: Settings,
+    status: str = "queued",
 ) -> None:
-    """Insert a queued job after checking quotas in one transaction."""
+    """Insert a job after checking quotas in one transaction."""
     now = utcnow()
     cutoff = _minus_one_hour(now)
     conn.execute("BEGIN IMMEDIATE")
@@ -50,7 +51,8 @@ def create_job(
             raise QuotaExceeded("límite de trabajos por hora alcanzado")
 
         active = conn.execute(
-            "SELECT COUNT(*) FROM jobs WHERE owner=? AND status IN ('queued', 'running')",
+            "SELECT COUNT(*) FROM jobs WHERE owner=? AND "
+            "status IN ('awaiting_upload', 'queued', 'running')",
             (owner,),
         ).fetchone()[0]
         if active >= settings.max_jobs_per_user:
@@ -58,8 +60,8 @@ def create_job(
 
         conn.execute(
             "INSERT INTO jobs(id, owner, status, created_at, model_ref, run_jplag, "
-            "jplag_solo_ac) VALUES (?, ?, 'queued', ?, ?, ?, ?)",
-            (job_id, owner, now, model_ref, int(run_jplag), int(jplag_solo_ac)),
+            "jplag_solo_ac) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (job_id, owner, status, now, model_ref, int(run_jplag), int(jplag_solo_ac)),
         )
     except BaseException:
         conn.execute("ROLLBACK")
@@ -97,9 +99,19 @@ def set_status(
     conn.execute(f"UPDATE jobs SET {', '.join(fields)} WHERE id=?", params)
 
 
+def mark_uploaded(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Atomically flip ``awaiting_upload`` -> ``queued``. Returns True on success."""
+    cur = conn.execute(
+        "UPDATE jobs SET status='queued' WHERE id=? AND status='awaiting_upload'",
+        (job_id,),
+    )
+    return cur.rowcount == 1
+
+
 def set_progress(conn: sqlite3.Connection, job_id: str, text: str) -> None:
     conn.execute(
-        "UPDATE jobs SET progress=? WHERE id=?", (redact(text), job_id)
+        "UPDATE jobs SET progress=?, progress_at=? WHERE id=?",
+        (redact(text), utcnow(), job_id),
     )
 
 
@@ -118,10 +130,10 @@ def get_job(
 
 
 def reconcile_startup(conn: sqlite3.Connection) -> int:
-    """Fail every job left ``running`` by a previous process. Returns the count."""
+    """Fail every job left mid-flight by a previous process. Returns the count."""
     cur = conn.execute(
         "UPDATE jobs SET status='failed', error='interrumpido por reinicio', "
-        "finished_at=? WHERE status='running'",
+        "finished_at=? WHERE status IN ('running', 'awaiting_upload')",
         (utcnow(),),
     )
     return cur.rowcount
@@ -136,6 +148,12 @@ def sweep_stale(conn: sqlite3.Connection, settings: Settings) -> None:
         "UPDATE jobs SET status='failed', error='expiró por antigüedad', "
         "finished_at=? WHERE status IN ('queued', 'running') AND created_at < ?",
         (utcnow(), cutoff),
+    )
+
+    conn.execute(
+        "UPDATE jobs SET status='failed', error='no se subió el archivo a tiempo', "
+        "finished_at=? WHERE status='awaiting_upload' AND created_at < ?",
+        (utcnow(), _minus_seconds(utcnow(), settings.awaiting_upload_timeout_s)),
     )
 
 

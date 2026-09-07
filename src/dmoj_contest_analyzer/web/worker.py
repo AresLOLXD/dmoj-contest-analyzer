@@ -21,6 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from dmoj_contest_analyzer import ingest
 from dmoj_contest_analyzer.analysis import (
@@ -30,12 +31,12 @@ from dmoj_contest_analyzer.analysis import (
     run_analysis,
 )
 from dmoj_contest_analyzer.llm import JudgeItem, load_backends, redact, resolve
-from dmoj_contest_analyzer.llm_run import run_judge
+from dmoj_contest_analyzer.llm_run import DeadlineState, run_judge
 from dmoj_contest_analyzer.report import write_excel_report
 from dmoj_contest_analyzer.submissions import EXT_TO_JPLAG_LANG
 
 from . import jobs
-from .db import TIMESTAMP_FORMAT, utcnow
+from .db import TIMESTAMP_FORMAT, connect, utcnow
 from .upload import UploadRejected, validate_and_extract
 
 log = logging.getLogger(__name__)
@@ -47,7 +48,10 @@ _DRAIN_INTERVAL_S = 0.1
 
 
 def make_executor(settings) -> ProcessPoolExecutor:
-    return ProcessPoolExecutor(max_workers=settings.max_concurrent_jobs)
+    # One subprocess per worker coroutine: a poisoned pool only affects its own
+    # worker. Concurrency across jobs comes from N worker coroutines, not from
+    # this pool's width. ``settings`` is kept for call compatibility.
+    return ProcessPoolExecutor(max_workers=1)
 
 
 def _analyze_sync(
@@ -208,11 +212,14 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
     )
 
     if row["model_ref"]:
+        llm_pool = getattr(app_state, "llm_pool", None) if app_state is not None else None
         try:
-            # Runs in the coroutine (blocking): keeps respx usable in tests and
-            # the sqlite connection on its owning thread.
-            _run_judge(conn, settings, data, Path(result["source_dir"]),
-                       row["model_ref"], judge_fn)
+            await asyncio.to_thread(
+                _run_judge, conn, settings, data, Path(result["source_dir"]),
+                row["model_ref"], judge_fn,
+                llm_pool=llm_pool,
+                total_deadline_s=settings.llm_judge_total_timeout_s,
+            )
         except Exception as exc:  # noqa: BLE001 - judge failure must not fail the job
             log.exception("LLM judge failed for job %s", jid)
             reason = redact(str(exc))[:200]
@@ -220,7 +227,7 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
             jobs.set_progress(
                 conn, jid, f"análisis completo; el juez LLM falló: {reason}"
             )
-        write_excel_report(data, out_path)
+        await asyncio.to_thread(write_excel_report, data, out_path)
 
     jobs.set_status(conn, jid, "done", finished=True)
     zip_path.unlink(missing_ok=True)
@@ -229,7 +236,7 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
 
 
 def _run_judge(conn, settings, data: ReportData, source_dir: Path, model_ref: str,
-               judge_fn) -> None:
+               judge_fn, *, llm_pool=None, total_deadline_s=None) -> None:
     backends = load_backends(settings.backends_config)
     spec, model = resolve(model_ref, backends)
 
@@ -259,11 +266,15 @@ def _run_judge(conn, settings, data: ReportData, source_dir: Path, model_ref: st
         ))
 
     stopped = _CapState()
+    timed_out = DeadlineState()
     results = judge_fn(
         items, spec, model,
         max_tokens=settings.llm_max_tokens_per_call,
         max_source_bytes=settings.max_submission_bytes,
         on_call=functools.partial(_daily_cap_ok, conn, settings, stopped),
+        executor=llm_pool,
+        total_deadline_s=total_deadline_s,
+        deadline_state=timed_out,
     )
 
     row_by_key = {(r["usuario"], r["problema"]): r for r in data.main_rows}
@@ -285,6 +296,11 @@ def _run_judge(conn, settings, data: ReportData, source_dir: Path, model_ref: st
         partial_note = (
             f"Juez con IA detenido: se alcanzó el tope diario de "
             f"{settings.llm_max_calls_per_day} llamadas."
+        )
+    elif timed_out.hit:
+        partial_note = (
+            f"Juez con IA detenido: se alcanzó el límite de "
+            f"{settings.llm_judge_total_timeout_s:.0f} s de tiempo total."
         )
     data.llm_partial_note = partial_note
 
@@ -342,20 +358,67 @@ def _drain_remaining(progress_q, conn, jid: str, jvm_pgids: set[int]) -> None:
         pass
 
 
-async def worker_loop(app_state, stop: asyncio.Event) -> None:
+async def worker_loop(ns, stop: asyncio.Event) -> None:
+    """One worker: claim + run jobs from ``ns.conn`` using ``ns.executor``.
+
+    ``ns`` is a ``SimpleNamespace`` with ``.settings``, ``.conn``, ``.executor``,
+    ``.nudge`` and (optionally) ``.llm_pool``.
+    """
     while not stop.is_set():
         try:
             ran = await process_one_job(
-                app_state.conn, app_state.settings, app_state.executor,
-                app_state=app_state,
+                ns.conn, ns.settings, ns.executor, app_state=ns,
             )
-            if not ran:
-                await _wait_for_work(stop, app_state.nudge, _IDLE_WAIT_S)
+            if ran:
+                # Signal consumed by this worker; clearing costs another worker
+                # at most one extra non-blocking poll.
+                ns.nudge.clear()
+            else:
+                await _wait_for_work(stop, ns.nudge, _IDLE_WAIT_S)
         except Exception:
             log.exception("worker loop iteration failed")
             # Back off so a persistent failure does not become a hot spin loop.
             await asyncio.sleep(5)
             continue
+
+
+def _close_namespaces(namespaces) -> None:
+    for ns in namespaces:
+        ns.executor.shutdown(wait=False, cancel_futures=True)
+        ns.conn.close()
+
+
+async def run_workers(app_state, stop: asyncio.Event) -> None:
+    """Supervisor: N worker coroutines, each with its own connection and pool."""
+    settings = app_state.settings
+    n = max(1, settings.max_concurrent_jobs)
+    namespaces = []
+    try:
+        for _ in range(n):
+            conn = connect(settings.db_path())
+            try:
+                executor = make_executor(settings)
+            except Exception:
+                conn.close()
+                raise
+            namespaces.append(SimpleNamespace(
+                settings=settings,
+                conn=conn,
+                executor=executor,
+                nudge=app_state.nudge,
+                llm_pool=getattr(app_state, "llm_pool", None),
+            ))
+    except Exception:
+        _close_namespaces(namespaces)
+        raise
+    tasks = [asyncio.create_task(worker_loop(ns, stop)) for ns in namespaces]
+    try:
+        await stop.wait()
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        _close_namespaces(namespaces)
 
 
 async def cleanup_loop(app_state, stop: asyncio.Event) -> None:
@@ -365,7 +428,13 @@ async def cleanup_loop(app_state, stop: asyncio.Event) -> None:
             _cleanup_once(app_state.conn, app_state.settings)
         except Exception:
             log.exception("cleanup iteration failed")
-        await _wait_for_work(stop, app_state.nudge, interval)
+        # Not nudged: cleanup has no reason to react to new jobs, and the shared
+        # nudge Event can stay set while all workers are busy (they only clear it
+        # at the top of their loop), which would hot-spin this loop.
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            pass
 
 
 def _cleanup_once(conn, settings) -> None:
@@ -379,7 +448,22 @@ def _cleanup_once(conn, settings) -> None:
     for r in expired:
         shutil.rmtree(settings.data_dir / r["id"], ignore_errors=True)
         conn.execute("DELETE FROM jobs WHERE id = ?", (r["id"],))
+    upload_cutoff = (
+        datetime.strptime(utcnow(), TIMESTAMP_FORMAT)
+        - timedelta(seconds=settings.awaiting_upload_timeout_s)
+    ).strftime(TIMESTAMP_FORMAT)
+    stale_uploads = conn.execute(
+        "SELECT id FROM jobs WHERE status='awaiting_upload' AND created_at < ?",
+        (upload_cutoff,),
+    ).fetchall()
+    stale_ids = [r["id"] for r in stale_uploads]
     jobs.sweep_stale(conn, settings)
+    for jid in stale_ids:
+        # Only reap the dir if sweep_stale actually failed the row. A PUT that
+        # raced in during the window flips it to 'queued' and must keep input.zip.
+        row = jobs.get_job(conn, jid)
+        if row is not None and row["status"] == "failed":
+            shutil.rmtree(settings.data_dir / jid, ignore_errors=True)
 
 
 async def _wait_for_work(stop: asyncio.Event, nudge: asyncio.Event, timeout: float) -> None:
@@ -389,5 +473,6 @@ async def _wait_for_work(stop: asyncio.Event, nudge: asyncio.Event, timeout: flo
     finally:
         for w in waiters:
             w.cancel()
-    if nudge.is_set():
-        nudge.clear()
+    # Do not clear ``nudge`` here: it is shared by N workers and one clear would
+    # hide the wake-up from the others. A stale-set nudge just costs one extra
+    # non-blocking poll, which is harmless. Workers clear it after a claim.

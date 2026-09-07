@@ -63,7 +63,7 @@ def run_analysis(
     n_users = len({s.username for s in subs})
     n_problems = len({s.problem for s in subs})
 
-    on_progress("timing y estilo")
+    on_progress(f"timing y estilo: {n_users} usuarios, {n_problems} problemas")
     main_rows = analyze_timing_style(subs)
 
     jplag_rows: list[dict] = []
@@ -86,6 +86,7 @@ def run_analysis(
 
         on_progress("\n--- Parseando resultados de JPlag ---")
         for problem, lang, jf in results:
+            on_progress(f"JPlag: {problem} ({lang})")
             rows = parse_jplag_result(problem, lang, jf, on_progress=on_progress)
             on_progress(f"  {jf.name}: {len(rows)} comparaciones extraídas")
             jplag_rows.extend(rows)

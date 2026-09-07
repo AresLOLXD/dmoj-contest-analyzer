@@ -23,9 +23,18 @@ def utcnow() -> str:
 
 
 def connect(path: Path) -> sqlite3.Connection:
-    """Open ``path`` with the pragmas the job store relies on."""
+    """Open ``path`` with the pragmas the job store relies on.
+
+    ``check_same_thread=False`` is required because ``asyncio.to_thread`` workers
+    (Excel writing, LLM judge) touch the connection off the event loop. Python's
+    sqlite3 runs in serialized threadsafety mode, so concurrent ``execute()``
+    calls cannot corrupt data or crash. Transaction isolation is NOT automatic on
+    a shared connection: a worker that writes must use its OWN connection,
+    separate from the request handlers' ``app.state.conn`` (the worker supervisor
+    task establishes this). Do not reintroduce shared-connection writes.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None)
+    conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -84,7 +93,11 @@ def _migration_0(conn: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_0]
+def _migration_1(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE jobs ADD COLUMN progress_at TEXT")
+
+
+_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_0, _migration_1]
 
 
 def migrate(conn: sqlite3.Connection) -> None:

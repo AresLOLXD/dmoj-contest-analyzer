@@ -201,6 +201,10 @@ ajusta `--forwarded-allow-ips` a esa dirección — **nunca uses `*`**.
 Nota: la cookie de sesión es `Secure`, así que el login solo funciona sobre HTTPS
 (o `127.0.0.1`). Sobre una IP de LAN en HTTP el login falla en silencio.
 
+### Flujo de subida en dos pasos
+
+La subida se hace en dos pasos: al pulsar *Analizar* se crea el trabajo y la página del trabajo muestra el selector de archivo, que sube el `.zip` con una barra de progreso. Esto evita el timeout de proxies como Cloudflare en subidas lentas. Desde el enlace "Mis trabajos" en la cabecera puedes ver el listado de tus últimos 50 trabajos con su estado actual.
+
 ### Anti-abuso (resumen)
 
 Autenticación obligatoria, límite de tamaño de subida, rate limit y cupos por

@@ -14,6 +14,7 @@ import re
 import secrets
 import sqlite3
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -30,14 +31,15 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from dmoj_contest_analyzer import llm
 
 from . import auth, jobs
-from .db import utcnow
-from .upload import UploadRejected, stream_to_file
+from .db import TIMESTAMP_FORMAT, utcnow
+from .upload import UploadRejected, stream_body_to_file
 
 log = logging.getLogger(__name__)
 
 _HERE = Path(__file__).parent
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_MAX_OPTIONS_FORM_BYTES = 16 * 1024
 
 _env = Environment(
     loader=FileSystemLoader(_HERE / "templates"),
@@ -94,11 +96,14 @@ def require_user(request: Request) -> auth.User:
     return user
 
 
-async def _check_csrf(request: Request, form) -> None:
-    sent = str(form.get("csrf", ""))
+def _check_csrf_value(request: Request, token: str) -> None:
     expected = request.session.get("csrf", "")
-    if not expected or not hmac.compare_digest(sent, expected):
+    if not expected or not hmac.compare_digest(str(token), expected):
         raise HttpError(403)
+
+
+async def _check_csrf(request: Request, form) -> None:
+    _check_csrf_value(request, str(form.get("csrf", "")))
 
 
 def _ensure_csrf(request: Request) -> None:
@@ -311,14 +316,11 @@ async def create_job_route(request: Request) -> Response:
     user = require_user(request)
     settings = _settings(request)
     conn = _conn(request)
-    max_bytes = settings.max_upload_mb * 1024 * 1024
 
-    # Require a numeric Content-Length up front: without it (HTTP/1.1 chunked)
-    # Starlette would spool the entire body to disk before the handler can react.
     content_length = request.headers.get("content-length")
     if content_length is None or not content_length.isdigit():
         raise HttpError(411, "Falta el encabezado Content-Length.")
-    if int(content_length) > max_bytes:
+    if int(content_length) > _MAX_OPTIONS_FORM_BYTES:
         raise HttpError(413)
 
     form = await request.form()
@@ -333,39 +335,86 @@ async def create_job_route(request: Request) -> Response:
     run_jplag = _truthy(form.get("run_jplag"))
     jplag_solo_ac = _truthy(form.get("jplag_solo_ac"))
 
-    upload = form.get("archivo")
-    if upload is None or not hasattr(upload, "read"):
-        raise HttpError(422, "Falta el archivo .zip.")
-
     job_id = uuid.uuid4().hex
-    job_dir = Path(settings.data_dir) / job_id
-    job_dir.mkdir(parents=True, exist_ok=False)
-    job_dir.chmod(0o700)
-
-    try:
-        await stream_to_file(upload, job_dir / "input.zip", max_bytes)
-    except UploadRejected as exc:
-        _rmtree(job_dir)
-        raise HttpError(exc.status, exc.reason) from exc
-
     try:
         jobs.create_job(
             conn, job_id=job_id, owner=user.username, model_ref=model_ref,
             run_jplag=run_jplag, jplag_solo_ac=jplag_solo_ac, settings=settings,
+            status="awaiting_upload",
         )
     except jobs.QuotaExceeded as exc:
-        _rmtree(job_dir)
         raise HttpError(429, exc.reason) from exc
 
-    request.app.state.nudge.set()
+    job_dir = Path(settings.data_dir) / job_id
+    job_dir.mkdir(parents=True, exist_ok=False)
+    job_dir.chmod(0o700)
+
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.put("/jobs/{job_id}/upload")
+async def job_upload(request: Request, job_id: str) -> Response:
+    user = require_user(request)
+    settings = _settings(request)
+    conn = _conn(request)
+    row = _load_owned_job(request, job_id, user.username)
+
+    token = request.headers.get("x-csrf-token", "")
+    _check_csrf_value(request, token)
+
+    if row["status"] != "awaiting_upload":
+        raise HttpError(409)
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    content_length = request.headers.get("content-length")
+    if content_length is None or not content_length.isdigit():
+        raise HttpError(411, "Falta el encabezado Content-Length.")
+    if int(content_length) > max_bytes:
+        raise HttpError(413)
+
+    job_dir = Path(settings.data_dir) / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job_dir.chmod(0o700)
+
+    dest = job_dir / "input.zip"
+    try:
+        await stream_body_to_file(request, dest, max_bytes)
+    except UploadRejected as exc:
+        dest.unlink(missing_ok=True)
+        raise HttpError(exc.status, exc.reason) from exc
+
+    if not jobs.mark_uploaded(conn, job_id):
+        dest.unlink(missing_ok=True)
+        raise HttpError(409)
+    request.app.state.nudge.set()
+    return Response(status_code=204)
+
+
+_ACTIVE_STATUSES = ("awaiting_upload", "queued", "running")
+
+
+@router.get("/jobs")
+async def jobs_list(request: Request) -> Response:
+    user = require_user(request)
+    rows = _conn(request).execute(
+        "SELECT id, status, created_at, finished_at, model_ref, error "
+        "FROM jobs WHERE owner=? ORDER BY created_at DESC LIMIT 50",
+        (user.username,),
+    ).fetchall()
+    has_active = any(r["status"] in _ACTIVE_STATUSES for r in rows)
+    return render("jobs_list.html", request, jobs=rows, has_active=has_active)
 
 
 @router.get("/jobs/{job_id}")
 async def job_page(request: Request, job_id: str) -> Response:
     user = require_user(request)
     row = _load_owned_job(request, job_id, user.username)
-    return render("job.html", request, job=row)
+    now = utcnow()
+    elapsed_s = _seconds_between(row["started_at"] or row["created_at"], now)
+    updated_ago_s = _seconds_between(row["progress_at"], now)
+    return render(
+        "job.html", request, job=row, elapsed_s=elapsed_s, updated_ago_s=updated_ago_s
+    )
 
 
 @router.get("/jobs/{job_id}/report")
@@ -387,7 +436,7 @@ async def job_cancel(request: Request, job_id: str) -> Response:
     row = _load_owned_job(request, job_id, user.username)
     form = await request.form()
     await _check_csrf(request, form)
-    if row["status"] != "queued":
+    if row["status"] not in ("queued", "awaiting_upload"):
         raise HttpError(409)
     jobs.set_status(conn, job_id, "cancelled", finished=True)
     # Drop the participant source immediately; the row is reaped later by retention.
@@ -400,6 +449,14 @@ async def job_cancel(request: Request, job_id: str) -> Response:
 # --------------------------------------------------------------------------- #
 def _now() -> str:
     return utcnow()
+
+
+def _seconds_between(a: str | None, b: str | None) -> int | None:
+    if not a or not b:
+        return None
+    ta = datetime.strptime(a, TIMESTAMP_FORMAT)
+    tb = datetime.strptime(b, TIMESTAMP_FORMAT)
+    return int(abs((tb - ta).total_seconds()))
 
 
 def _truthy(value) -> bool:

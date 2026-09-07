@@ -35,11 +35,12 @@ class Settings(BaseSettings):
     # Job scheduling / rate limiting
     rate_limit_per_hour: int = 5
     max_jobs_per_user: int = 2
-    max_concurrent_jobs: int = 1
+    max_concurrent_jobs: int = 2
     job_timeout_s: float = 1800
     jplag_per_invocation_timeout_s: int = 300
     retention_h: int = 12
     cleanup_every_min: int = 30
+    awaiting_upload_timeout_s: float = 3600
 
     # Auth
     login_max_attempts: int = 8
@@ -50,6 +51,8 @@ class Settings(BaseSettings):
     llm_max_tokens_per_call: int = 1500
     llm_request_timeout_s: float = 60
     llm_threshold: int = 70
+    llm_concurrency: int = 4
+    llm_judge_total_timeout_s: float = 600
 
     # Optional provider API keys
     openai_api_key: str | None = None

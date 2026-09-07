@@ -47,3 +47,20 @@ def test_job_status_page_escapes_attacker_strings(client):
     assert XSS not in r.text
     assert "<script>alert" not in r.text
     assert "&lt;script&gt;alert" in r.text
+
+
+def test_jobs_list_escapes_model_ref(client, settings):
+    from dmoj_contest_analyzer.web.db import connect, utcnow
+
+    c = connect(settings.db_path())
+    jid = "b" * 32
+    c.execute(
+        "INSERT INTO jobs(id,owner,status,created_at,model_ref) "
+        "VALUES (?,?,?,?,?)",
+        (jid, "alice", "created", utcnow(), XSS),
+    )
+    c.close()
+
+    html = client.get("/jobs").text
+    assert XSS not in html
+    assert "&lt;script&gt;" in html

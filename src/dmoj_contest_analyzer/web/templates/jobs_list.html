@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Mis trabajos{% endblock %}
+{% block head %}
+{% if has_active %}<meta http-equiv="refresh" content="10">{% endif %}
+{% endblock %}
+{% block content %}
+<h1>Mis trabajos</h1>
+{% if not jobs %}
+<p>Aún no tienes trabajos. <a href="/">Subir un export</a>.</p>
+{% else %}
+<table class="jobs">
+  <thead><tr><th>Estado</th><th>Creado</th><th>Modelo</th><th></th></tr></thead>
+  <tbody>
+  {% for job in jobs %}
+    <tr>
+      <td><span class="badge badge-{{ job.status }}">{{ job.status }}</span></td>
+      <td class="mono">{{ job.created_at[:19] | replace("T", " ") }}</td>
+      <td>{{ job.model_ref or "—" }}</td>
+      <td><a href="/jobs/{{ job.id }}">ver</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

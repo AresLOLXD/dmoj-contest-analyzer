@@ -28,10 +28,37 @@ def test_utcnow_format():
 def test_migrate_sets_user_version(settings):
     c = connect(settings.db_path())
     migrate(c)
-    assert c.execute("PRAGMA user_version").fetchone()[0] >= 1
+    assert c.execute("PRAGMA user_version").fetchone()[0] >= 2
     # idempotent
     migrate(c)
     c.close()
+
+
+def test_migration_1_adds_progress_at(settings):
+    c = connect(settings.db_path())
+    migrate(c)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
+    assert "progress_at" in cols
+    assert c.execute("PRAGMA user_version").fetchone()[0] >= 2
+    migrate(c)  # idempotent
+    c.close()
+
+
+def test_set_progress_stamps_progress_at(conn, settings):
+    jid = "a" * 32
+    jobs.create_job(
+        conn,
+        job_id=jid,
+        owner="alice",
+        model_ref=None,
+        run_jplag=False,
+        jplag_solo_ac=False,
+        settings=settings,
+    )
+    jobs.set_progress(conn, jid, "parseando envíos")
+    row = jobs.get_job(conn, jid)
+    assert row["progress"] == "parseando envíos"
+    assert row["progress_at"] is not None
 
 
 def test_rate_limit_enforced(conn, settings):
@@ -119,3 +146,52 @@ def test_sweep_stale_fails_old_jobs(conn, settings):
     assert jobs.get_job(conn, jid)["status"] == "failed"
     assert jobs.get_job(conn, jid)["finished_at"] is not None
     assert jobs.get_job(conn, fresh)["status"] == "queued"
+
+
+def test_create_job_awaiting_upload_status_and_quota(conn, settings):
+    jobs.create_job(
+        conn,
+        job_id="a" * 32,
+        owner="alice",
+        model_ref=None,
+        run_jplag=False,
+        jplag_solo_ac=False,
+        settings=settings,
+        status="awaiting_upload",
+    )
+    assert jobs.get_job(conn, "a" * 32)["status"] == "awaiting_upload"
+
+    settings.max_jobs_per_user = 1
+    with pytest.raises(jobs.QuotaExceeded):
+        jobs.create_job(
+            conn,
+            job_id="b" * 32,
+            owner="alice",
+            model_ref=None,
+            run_jplag=False,
+            jplag_solo_ac=False,
+            settings=settings,
+            status="awaiting_upload",
+        )
+
+
+def test_sweep_stale_fails_old_awaiting_upload(conn, settings):
+    settings.awaiting_upload_timeout_s = 1
+    jobs.create_job(
+        conn,
+        job_id="c" * 32,
+        owner="alice",
+        model_ref=None,
+        run_jplag=False,
+        jplag_solo_ac=False,
+        settings=settings,
+        status="awaiting_upload",
+    )
+    conn.execute(
+        "UPDATE jobs SET created_at=? WHERE id=?",
+        ("2000-01-01T00:00:00.000000Z", "c" * 32),
+    )
+    jobs.sweep_stale(conn, settings)
+    row = jobs.get_job(conn, "c" * 32)
+    assert row["status"] == "failed"
+    assert "no se subió" in row["error"]

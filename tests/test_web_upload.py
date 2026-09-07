@@ -213,3 +213,24 @@ def test_stream_to_file_too_big(tmp_path):
         asyncio.run(stream_to_file(_FakeUpload(b"a" * 5_000_000), dest, max_bytes=1024))
     assert e.value.status == 413
     assert not dest.exists()
+
+
+@pytest.mark.asyncio
+async def test_stream_body_to_file_writes_and_caps(tmp_path):
+    from dmoj_contest_analyzer.web.upload import UploadRejected, stream_body_to_file
+
+    class _Req:
+        def __init__(self, chunks):
+            self._chunks = chunks
+        async def stream(self):
+            for c in self._chunks:
+                yield c
+
+    dest = tmp_path / "out.bin"
+    n = await stream_body_to_file(_Req([b"ab", b"cd"]), dest, max_bytes=10)
+    assert n == 4 and dest.read_bytes() == b"abcd"
+
+    with pytest.raises(UploadRejected) as ei:
+        await stream_body_to_file(_Req([b"x" * 6, b"x" * 6]), dest, max_bytes=10)
+    assert ei.value.status == 413
+    assert not dest.exists()
