@@ -7,6 +7,9 @@ services:
     image: dmoj-contest-analyzer:local
     user: "10001:10001"
     ports: ["127.0.0.1:8000:8000"]
+    env_file:
+      - path: .env
+        required: false
     environment:
       APP_SECRET_KEY: ${APP_SECRET_KEY:?set it}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

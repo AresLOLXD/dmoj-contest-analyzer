@@ -17,3 +17,4 @@ reporte.csv
 vendor/
 /data/
 backends.toml
+.env

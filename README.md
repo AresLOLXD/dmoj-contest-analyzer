@@ -127,11 +127,15 @@ autenticación y límites de abuso.
 ### Puesta en marcha
 
 ```bash
-cp backends.example.toml backends.toml       # y edítalo: modelos, URLs, backends
-export APP_SECRET_KEY=$(openssl rand -hex 32)
+cp backends.example.toml backends.toml       # modelos, URLs y backends del juez LLM
+cp .env.example .env                          # y edítalo: APP_SECRET_KEY, API keys, límites
 mkdir -p data && sudo chown -R 10001:10001 data   # uid del contenedor; si no, EACCES al crear la DB
 docker compose up -d
 ```
+
+Genera el secreto con `openssl rand -hex 32` y pégalo en `APP_SECRET_KEY` dentro de
+`.env`. Configuración detallada (esquema de `backends.toml` y todos los parámetros
+ajustables) en [`docs/configuracion-web.md`](docs/configuracion-web.md).
 
 ### Primer arranque
 
