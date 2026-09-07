@@ -25,10 +25,13 @@ def utcnow() -> str:
 def connect(path: Path) -> sqlite3.Connection:
     """Open ``path`` with the pragmas the job store relies on.
 
-    ``check_same_thread=False``: the connection is handed to ``asyncio.to_thread``
-    workers (Excel writing, LLM judge). Python's sqlite3 serializes statements
-    across threads, and the owning coroutine always ``await``s the thread, so
-    there is no concurrent use.
+    ``check_same_thread=False`` is required because ``asyncio.to_thread`` workers
+    (Excel writing, LLM judge) touch the connection off the event loop. Python's
+    sqlite3 runs in serialized threadsafety mode, so concurrent ``execute()``
+    calls cannot corrupt data or crash. Transaction isolation is NOT automatic on
+    a shared connection: a worker that writes must use its OWN connection,
+    separate from the request handlers' ``app.state.conn`` (the worker supervisor
+    task establishes this). Do not reintroduce shared-connection writes.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
