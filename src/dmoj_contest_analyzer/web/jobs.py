@@ -118,10 +118,10 @@ def get_job(
 
 
 def reconcile_startup(conn: sqlite3.Connection) -> int:
-    """Fail every job left ``running`` by a previous process. Returns the count."""
+    """Fail every job left mid-flight by a previous process. Returns the count."""
     cur = conn.execute(
         "UPDATE jobs SET status='failed', error='interrumpido por reinicio', "
-        "finished_at=? WHERE status='running'",
+        "finished_at=? WHERE status IN ('running', 'awaiting_upload')",
         (utcnow(),),
     )
     return cur.rowcount

@@ -8,7 +8,7 @@ import pytest
 import respx
 
 from dmoj_contest_analyzer.web import jobs, worker
-from dmoj_contest_analyzer.web.db import utcnow
+from dmoj_contest_analyzer.web.db import connect, utcnow
 from tests.test_cli_golden import read_xlsx_values
 from tests.web_conftest import make_zip
 
@@ -309,6 +309,99 @@ async def test_worker_loop_backs_off_on_persistent_failure(settings, monkeypatch
 
     assert calls["n"] >= 3
     assert all(s >= 1 for s in slept)
+
+
+def _report_shape(work_dir: str) -> dict:
+    return {
+        "source_dir": str(os.path.dirname(work_dir)), "main_rows": [], "jplag_rows": [],
+        "n_subs": 0, "n_users": 0, "n_problems": 0,
+    }
+
+
+def _slow_concurrent_probe(job_id, zip_path, work_dir, out_path, opts_dict, progress_q):
+    """Module-level (picklable) analyze stub: records its start time to a shared
+    file so the parent can assert the two subprocess starts overlap."""
+    import time
+    from pathlib import Path
+
+    marks = Path(work_dir).parent.parent / "starts.txt"
+    with marks.open("a") as fh:
+        fh.write(f"{time.monotonic()}\n")
+    time.sleep(1.0)
+    return _report_shape(work_dir)
+
+
+def _slow_report(job_id, zip_path, work_dir, out_path, opts_dict, progress_q):
+    import time
+    time.sleep(0.6)
+    return _report_shape(work_dir)
+
+
+@pytest.mark.asyncio
+async def test_two_workers_process_two_jobs_concurrently(conn, settings, monkeypatch):
+    settings.max_concurrent_jobs = 2
+
+    monkeypatch.setattr(worker, "_analyze_sync", _slow_concurrent_probe)
+    j1, j2 = _enqueue(conn, settings), _enqueue(conn, settings)
+
+    stop = asyncio.Event()
+    state = SimpleNamespace(settings=settings, nudge=asyncio.Event())
+    sup = asyncio.create_task(worker.run_workers(state, stop))
+    try:
+        for _ in range(60):
+            if {jobs.get_job(conn, j)["status"] for j in (j1, j2)} == {"done"}:
+                break
+            await asyncio.sleep(0.1)
+    finally:
+        stop.set()
+        state.nudge.set()
+        await asyncio.wait_for(sup, timeout=10)
+
+    assert {jobs.get_job(conn, j)["status"] for j in (j1, j2)} == {"done"}
+    started = [
+        float(x) for x in
+        (settings.data_dir / "starts.txt").read_text().split()
+    ]
+    # Concurrent: the two subprocess starts are < 0.5 s apart, not ~1 s serial.
+    assert len(started) == 2 and abs(started[0] - started[1]) < 0.5
+
+
+@pytest.mark.asyncio
+async def test_worker_writes_isolated_from_handler_rollback(conn, settings, monkeypatch):
+    """A separate connection's BEGIN IMMEDIATE ... ROLLBACK (a request handler)
+    must not undo the worker's status/progress writes (CONTROLLER NOTE)."""
+    settings.max_concurrent_jobs = 1
+
+    monkeypatch.setattr(worker, "_analyze_sync", _slow_report)
+    jid = _enqueue(conn, settings)
+
+    stop = asyncio.Event()
+    state = SimpleNamespace(settings=settings, nudge=asyncio.Event())
+    sup = asyncio.create_task(worker.run_workers(state, stop))
+    try:
+        for _ in range(60):
+            if jobs.get_job(conn, jid)["status"] == "running":
+                break
+            await asyncio.sleep(0.05)
+        assert jobs.get_job(conn, jid)["status"] == "running"
+
+        other = connect(settings.db_path())
+        try:
+            other.execute("BEGIN IMMEDIATE")
+            other.execute("ROLLBACK")
+        finally:
+            other.close()
+
+        for _ in range(80):
+            if jobs.get_job(conn, jid)["status"] == "done":
+                break
+            await asyncio.sleep(0.1)
+    finally:
+        stop.set()
+        state.nudge.set()
+        await asyncio.wait_for(sup, timeout=10)
+
+    assert jobs.get_job(conn, jid)["status"] == "done"
 
 
 @pytest.mark.asyncio

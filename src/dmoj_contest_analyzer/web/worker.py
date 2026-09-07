@@ -47,7 +47,10 @@ _DRAIN_INTERVAL_S = 0.1
 
 
 def make_executor(settings) -> ProcessPoolExecutor:
-    return ProcessPoolExecutor(max_workers=settings.max_concurrent_jobs)
+    # One subprocess per worker coroutine: a poisoned pool only affects its own
+    # worker. Concurrency across jobs comes from N worker coroutines, not from
+    # this pool's width. ``settings`` is kept for call compatibility.
+    return ProcessPoolExecutor(max_workers=1)
 
 
 def _analyze_sync(
@@ -354,20 +357,57 @@ def _drain_remaining(progress_q, conn, jid: str, jvm_pgids: set[int]) -> None:
         pass
 
 
-async def worker_loop(app_state, stop: asyncio.Event) -> None:
+async def worker_loop(ns, stop: asyncio.Event) -> None:
+    """One worker: claim + run jobs from ``ns.conn`` using ``ns.executor``.
+
+    ``ns`` is a ``SimpleNamespace`` with ``.settings``, ``.conn``, ``.executor``,
+    ``.nudge`` and (optionally) ``.llm_pool``.
+    """
     while not stop.is_set():
         try:
             ran = await process_one_job(
-                app_state.conn, app_state.settings, app_state.executor,
-                app_state=app_state,
+                ns.conn, ns.settings, ns.executor, app_state=ns,
             )
-            if not ran:
-                await _wait_for_work(stop, app_state.nudge, _IDLE_WAIT_S)
+            if ran:
+                # Signal consumed by this worker; clearing costs another worker
+                # at most one extra non-blocking poll.
+                ns.nudge.clear()
+            else:
+                await _wait_for_work(stop, ns.nudge, _IDLE_WAIT_S)
         except Exception:
             log.exception("worker loop iteration failed")
             # Back off so a persistent failure does not become a hot spin loop.
             await asyncio.sleep(5)
             continue
+
+
+async def run_workers(app_state, stop: asyncio.Event) -> None:
+    """Supervisor: N worker coroutines, each with its own connection and pool."""
+    from types import SimpleNamespace
+
+    from .db import connect
+
+    settings = app_state.settings
+    n = max(1, settings.max_concurrent_jobs)
+    namespaces = []
+    for _ in range(n):
+        namespaces.append(SimpleNamespace(
+            settings=settings,
+            conn=connect(settings.db_path()),
+            executor=make_executor(settings),
+            nudge=app_state.nudge,
+            llm_pool=getattr(app_state, "llm_pool", None),
+        ))
+    tasks = [asyncio.create_task(worker_loop(ns, stop)) for ns in namespaces]
+    try:
+        await stop.wait()
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for ns in namespaces:
+            ns.executor.shutdown(wait=False, cancel_futures=True)
+            ns.conn.close()
 
 
 async def cleanup_loop(app_state, stop: asyncio.Event) -> None:
@@ -401,5 +441,6 @@ async def _wait_for_work(stop: asyncio.Event, nudge: asyncio.Event, timeout: flo
     finally:
         for w in waiters:
             w.cancel()
-    if nudge.is_set():
-        nudge.clear()
+    # Do not clear ``nudge`` here: it is shared by N workers and one clear would
+    # hide the wake-up from the others. A stale-set nudge just costs one extra
+    # non-blocking poll, which is harmless. Workers clear it after a claim.
