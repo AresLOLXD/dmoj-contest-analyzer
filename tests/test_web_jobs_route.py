@@ -1,6 +1,5 @@
 import os
 import re
-import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -51,18 +50,32 @@ def test_upload_requires_auth(client):
     assert "/login" in r.headers["location"]
 
 
-def test_post_job_success(client):
-    assert _login(client).status_code == 303
-    token = _csrf(client.get("/").text)
-    files = {"archivo": ("e.zip", make_zip(GOOD), "application/zip")}
+def _create_job(client, token):
     r = client.post(
-        "/jobs",
-        data={"csrf": token, "run_jplag": "false"},
-        files=files,
-        follow_redirects=False,
+        "/jobs", data={"csrf": token, "run_jplag": "false"}, follow_redirects=False
     )
     assert r.status_code == 303
-    assert "/jobs/" in r.headers["location"]
+    return r.headers["location"].rsplit("/", 1)[-1]
+
+
+def test_post_job_success(client, settings):
+    assert _login(client).status_code == 303
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    assert "/jobs/" in f"/jobs/{jid}"
+
+    c = connect(settings.db_path())
+    assert jobs.get_job(c, jid)["status"] == "awaiting_upload"
+    zip_bytes = make_zip(GOOD)
+    up = client.put(
+        f"/jobs/{jid}/upload",
+        content=zip_bytes,
+        headers={"X-CSRF-Token": token, "Content-Length": str(len(zip_bytes))},
+    )
+    assert up.status_code == 204
+    assert jobs.get_job(c, jid)["status"] == "queued"
+    assert (settings.data_dir / jid / "input.zip").read_bytes() == zip_bytes
+    c.close()
 
 
 def test_security_headers_present(client):
@@ -72,23 +85,43 @@ def test_security_headers_present(client):
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
 
 
-def test_post_job_rejects_missing_content_length(client):
-    """Chunked upload with no Content-Length must be rejected before parsing (I2)."""
+def test_upload_rejects_oversize(client, settings):
+    """A Content-Length above the cap is rejected with 413 before streaming."""
     assert _login(client).status_code == 303
     token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    big = b"x" * (settings.max_upload_mb * 1024 * 1024 + 1)
+    r = client.put(
+        f"/jobs/{jid}/upload",
+        content=big,
+        headers={"X-CSRF-Token": token, "Content-Length": str(len(big))},
+    )
+    assert r.status_code == 413
 
-    def _chunks():
-        yield b"--x\r\nContent-Disposition: form-data; name=csrf\r\n\r\n"
-        yield token.encode() + b"\r\n--x--\r\n"
 
-    r = client.post(
-        "/jobs",
-        content=_chunks(),
-        headers={"Content-Type": "multipart/form-data; boundary=x"},
+def test_upload_rejects_wrong_state(client, settings):
+    _login(client)
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    zb = make_zip(GOOD)
+    hdr = {"X-CSRF-Token": token, "Content-Length": str(len(zb))}
+    assert client.put(f"/jobs/{jid}/upload", content=zb, headers=hdr).status_code == 204
+    assert client.put(f"/jobs/{jid}/upload", content=zb, headers=hdr).status_code == 409
+
+
+def test_upload_rejects_foreign_owner(client, settings):
+    _login(client)
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    client.post("/logout", data={"csrf": token})
+    r = client.put(
+        f"/jobs/{jid}/upload",
+        content=b"x",
+        headers={"X-CSRF-Token": token, "Content-Length": "1"},
         follow_redirects=False,
     )
-    assert r.status_code == 411
-    assert "content-length" not in r.request.headers  # sent chunked, no CL
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
 
 
 def test_job_id_validation(client):
@@ -98,8 +131,20 @@ def test_job_id_validation(client):
 
 def test_csrf_required_on_post_jobs(client):
     _login(client)
-    files = {"archivo": ("e.zip", make_zip(GOOD), "application/zip")}
-    r = client.post("/jobs", data={"csrf": "wrong"}, files=files, follow_redirects=False)
+    r = client.post("/jobs", data={"csrf": "wrong"}, follow_redirects=False)
+    assert r.status_code == 403
+
+
+def test_csrf_required_on_upload(client):
+    _login(client)
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    zb = make_zip(GOOD)
+    r = client.put(
+        f"/jobs/{jid}/upload",
+        content=zb,
+        headers={"X-CSRF-Token": "wrong", "Content-Length": str(len(zb))},
+    )
     assert r.status_code == 403
 
 
@@ -156,26 +201,49 @@ def test_lifespan_creates_data_tmp_dir(settings):
         assert tmp.is_dir()
 
 
-def test_post_job_large_upload_spools_to_disk(client, settings, monkeypatch):
-    # A >1 MB multipart part rolls Starlette's SpooledTemporaryFile over to
-    # tempfile in $TMPDIR (= DATA_DIR/tmp under the hardened compose). Point
-    # TMPDIR there: the lifespan must have created it or POST /jobs raises
-    # FileNotFoundError.
-    monkeypatch.setattr(tempfile, "tempdir", str(settings.data_dir / "tmp"))
-    assert (settings.data_dir / "tmp").is_dir()
+def test_upload_large_body_streams_to_disk(client, settings):
+    # A multi-MB raw body on PUT .../upload is streamed straight to input.zip
+    # (no multipart spooling). Under the cap it succeeds.
     assert _login(client).status_code == 303
     token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
     entries = dict(GOOD)
     entries["userA/p1/pad.bin"] = os.urandom(2 * 1024 * 1024)  # incompressible
-    files = {"archivo": ("e.zip", make_zip(entries), "application/zip")}
+    zip_bytes = make_zip(entries)
+    r = client.put(
+        f"/jobs/{jid}/upload",
+        content=zip_bytes,
+        headers={"X-CSRF-Token": token, "Content-Length": str(len(zip_bytes))},
+    )
+    assert r.status_code == 204
+    assert (settings.data_dir / jid / "input.zip").read_bytes() == zip_bytes
+
+
+def test_upload_over_cap_streams_413(client, settings):
+    assert _login(client).status_code == 303
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    settings.max_upload_mb = 1
+    body = os.urandom(2 * 1024 * 1024)
+    r = client.put(
+        f"/jobs/{jid}/upload",
+        content=body,
+        headers={"X-CSRF-Token": token, "Content-Length": str(len(body))},
+    )
+    assert r.status_code == 413
+
+
+def test_cancel_awaiting_upload_job(client, settings):
+    _login(client)
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
     r = client.post(
-        "/jobs",
-        data={"csrf": token, "run_jplag": "false"},
-        files=files,
-        follow_redirects=False,
+        f"/jobs/{jid}/cancel", data={"csrf": token}, follow_redirects=False
     )
     assert r.status_code == 303
-    assert "/jobs/" in r.headers["location"]
+    c = connect(settings.db_path())
+    assert jobs.get_job(c, jid)["status"] == "cancelled"
+    c.close()
 
 
 def test_healthz_unhealthy_without_jar(client):

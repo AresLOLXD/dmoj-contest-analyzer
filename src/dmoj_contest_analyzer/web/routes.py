@@ -31,7 +31,7 @@ from dmoj_contest_analyzer import llm
 
 from . import auth, jobs
 from .db import utcnow
-from .upload import UploadRejected, stream_to_file
+from .upload import UploadRejected, stream_body_to_file
 
 log = logging.getLogger(__name__)
 
@@ -94,11 +94,14 @@ def require_user(request: Request) -> auth.User:
     return user
 
 
-async def _check_csrf(request: Request, form) -> None:
-    sent = str(form.get("csrf", ""))
+def _check_csrf_value(request: Request, token: str) -> None:
     expected = request.session.get("csrf", "")
-    if not expected or not hmac.compare_digest(sent, expected):
+    if not expected or not hmac.compare_digest(str(token), expected):
         raise HttpError(403)
+
+
+async def _check_csrf(request: Request, form) -> None:
+    _check_csrf_value(request, str(form.get("csrf", "")))
 
 
 def _ensure_csrf(request: Request) -> None:
@@ -311,15 +314,6 @@ async def create_job_route(request: Request) -> Response:
     user = require_user(request)
     settings = _settings(request)
     conn = _conn(request)
-    max_bytes = settings.max_upload_mb * 1024 * 1024
-
-    # Require a numeric Content-Length up front: without it (HTTP/1.1 chunked)
-    # Starlette would spool the entire body to disk before the handler can react.
-    content_length = request.headers.get("content-length")
-    if content_length is None or not content_length.isdigit():
-        raise HttpError(411, "Falta el encabezado Content-Length.")
-    if int(content_length) > max_bytes:
-        raise HttpError(413)
 
     form = await request.form()
     await _check_csrf(request, form)
@@ -333,32 +327,56 @@ async def create_job_route(request: Request) -> Response:
     run_jplag = _truthy(form.get("run_jplag"))
     jplag_solo_ac = _truthy(form.get("jplag_solo_ac"))
 
-    upload = form.get("archivo")
-    if upload is None or not hasattr(upload, "read"):
-        raise HttpError(422, "Falta el archivo .zip.")
-
     job_id = uuid.uuid4().hex
-    job_dir = Path(settings.data_dir) / job_id
-    job_dir.mkdir(parents=True, exist_ok=False)
-    job_dir.chmod(0o700)
-
-    try:
-        await stream_to_file(upload, job_dir / "input.zip", max_bytes)
-    except UploadRejected as exc:
-        _rmtree(job_dir)
-        raise HttpError(exc.status, exc.reason) from exc
-
     try:
         jobs.create_job(
             conn, job_id=job_id, owner=user.username, model_ref=model_ref,
             run_jplag=run_jplag, jplag_solo_ac=jplag_solo_ac, settings=settings,
+            status="awaiting_upload",
         )
     except jobs.QuotaExceeded as exc:
-        _rmtree(job_dir)
         raise HttpError(429, exc.reason) from exc
 
-    request.app.state.nudge.set()
+    job_dir = Path(settings.data_dir) / job_id
+    job_dir.mkdir(parents=True, exist_ok=False)
+    job_dir.chmod(0o700)
+
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
+@router.put("/jobs/{job_id}/upload")
+async def job_upload(request: Request, job_id: str) -> Response:
+    user = require_user(request)
+    settings = _settings(request)
+    conn = _conn(request)
+    row = _load_owned_job(request, job_id, user.username)
+
+    token = request.headers.get("x-csrf-token")
+    if token is None:
+        form = await request.form()
+        token = str(form.get("csrf", ""))
+    _check_csrf_value(request, token)
+
+    if row["status"] != "awaiting_upload":
+        raise HttpError(409)
+
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    content_length = request.headers.get("content-length")
+    if content_length is None or not content_length.isdigit():
+        raise HttpError(411, "Falta el encabezado Content-Length.")
+    if int(content_length) > max_bytes:
+        raise HttpError(413)
+
+    dest = Path(settings.data_dir) / job_id / "input.zip"
+    try:
+        await stream_body_to_file(request, dest, max_bytes)
+    except UploadRejected as exc:
+        dest.unlink(missing_ok=True)
+        raise HttpError(exc.status, exc.reason) from exc
+
+    jobs.set_status(conn, job_id, "queued")
+    request.app.state.nudge.set()
+    return Response(status_code=204)
 
 
 @router.get("/jobs/{job_id}")
@@ -387,7 +405,7 @@ async def job_cancel(request: Request, job_id: str) -> Response:
     row = _load_owned_job(request, job_id, user.username)
     form = await request.form()
     await _check_csrf(request, form)
-    if row["status"] != "queued":
+    if row["status"] not in ("queued", "awaiting_upload"):
         raise HttpError(409)
     jobs.set_status(conn, job_id, "cancelled", finished=True)
     # Drop the participant source immediately; the row is reaped later by retention.
