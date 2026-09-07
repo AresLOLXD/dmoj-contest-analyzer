@@ -1,5 +1,6 @@
 """Batch LLM judge loop shared by the CLI and the web worker."""
 
+import logging
 from collections.abc import Callable
 from concurrent.futures import Executor, ThreadPoolExecutor
 from concurrent.futures import wait as futures_wait
@@ -7,6 +8,8 @@ from concurrent.futures import wait as futures_wait
 import httpx
 
 from dmoj_contest_analyzer.llm import BackendSpec, JudgeItem, JudgeResult, judge_one
+
+log = logging.getLogger(__name__)
 
 
 class DeadlineState:
@@ -22,6 +25,7 @@ def run_judge(
     max_tokens: int,
     max_source_bytes: int,
     max_workers: int = 4,
+    request_timeout_s: float = 60,
     on_call: Callable[[], bool] = lambda: True,
     executor: Executor | None = None,
     total_deadline_s: float | None = None,
@@ -51,7 +55,7 @@ def run_judge(
     pool: Executor = executor or ThreadPoolExecutor(
         max_workers=min(max_workers, len(allowed))
     )
-    client = httpx.Client(follow_redirects=False, timeout=60)
+    client = httpx.Client(follow_redirects=False, timeout=request_timeout_s)
     try:
         futures = {
             pool.submit(
@@ -67,12 +71,17 @@ def run_judge(
                 deadline_state.hit = True
             for future in not_done:
                 future.cancel()
-                results.append(JudgeResult(futures[future].key, None))
+                results.append(JudgeResult(
+                    futures[future].key, None, error="cancelada por el deadline total"
+                ))
         for future in done:
             try:
                 results.append(future.result())
-            except Exception:
-                results.append(JudgeResult(futures[future].key, None))
+            except Exception as exc:  # noqa: BLE001 - one bad call must not abort the batch
+                log.warning("judge call failed for %s: %s", futures[future].key, exc)
+                results.append(JudgeResult(
+                    futures[future].key, None, error=f"{type(exc).__name__}: {exc}"
+                ))
         return results
     finally:
         client.close()

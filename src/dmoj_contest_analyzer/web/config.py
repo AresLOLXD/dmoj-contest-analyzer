@@ -49,10 +49,13 @@ class Settings(BaseSettings):
     llm_max_submissions_per_job: int = 200
     llm_max_calls_per_day: int = 2000
     llm_max_tokens_per_call: int = 1500
-    llm_request_timeout_s: float = 60
+    llm_request_timeout_s: float = 120
     llm_threshold: int = 70
-    llm_concurrency: int = 4
-    llm_judge_total_timeout_s: float = 600
+    # Local backends (Ollama/LM Studio) serialise requests on a single GPU, so
+    # firing many in parallel just piles them up past the per-call timeout. Keep
+    # this low; hosted backends can raise it via the env var.
+    llm_concurrency: int = 2
+    llm_judge_total_timeout_s: float = 1800
 
     # Optional provider API keys
     openai_api_key: str | None = None

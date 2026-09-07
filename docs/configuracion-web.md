@@ -160,10 +160,10 @@ Los nombres son insensibles a mayúsculas. Los defaults salen de
 | `LLM_MAX_SUBMISSIONS_PER_JOB` | `200` | Máximo de pares `(usuario, problema)` que el juez evalúa en un trabajo. |
 | `LLM_MAX_CALLS_PER_DAY` | `2000` | Tope global de llamadas al modelo por día. Al alcanzarlo, el juez se salta el resto. |
 | `LLM_MAX_TOKENS_PER_CALL` | `1500` | Límite de tokens de salida por llamada. |
-| `LLM_REQUEST_TIMEOUT_S` | `60` | Timeout de cada petición HTTP al proveedor. |
+| `LLM_REQUEST_TIMEOUT_S` | `120` | Timeout de cada petición HTTP al proveedor. Súbelo si el modelo local tarda más que esto por envío. |
 | `LLM_THRESHOLD` | `70` | `llm_ai_score` a partir del cual se considera señal fuerte (solo informativo; no suma a `score_sospecha`). |
-| `LLM_CONCURRENCY` | `4` | Tope global de llamadas simultáneas al LLM (1 = secuencial). |
-| `LLM_JUDGE_TOTAL_TIMEOUT_S` | `600` | Tiempo total máximo del juez con IA por trabajo. |
+| `LLM_CONCURRENCY` | `2` | Tope global de llamadas simultáneas al LLM (1 = secuencial). Un modelo local en una sola GPU serializa las peticiones, así que valores altos solo las encolan hasta pasarse del timeout. |
+| `LLM_JUDGE_TOTAL_TIMEOUT_S` | `1800` | Tiempo total máximo del juez con IA por trabajo. |
 
 #### API keys de proveedores
 

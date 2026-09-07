@@ -146,6 +146,26 @@ async def test_llm_path_writes_report(conn, settings):
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_llm_per_call_failures_surface_in_report(conn, settings):
+    """Per-call failures (timeouts, 5xx) must show in the note, not vanish silently."""
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(500, headers={"Retry-After": "0"})
+    )
+    settings.backends_config.write_text(BACKENDS_TOML)
+    jid = _enqueue(conn, settings, model_ref="openai|gpt-4o")
+    ex = worker.make_executor(settings)
+    try:
+        assert await worker.process_one_job(conn, settings, ex) is True
+    finally:
+        ex.shutdown(wait=True)
+    assert jobs.get_job(conn, jid)["status"] == "done"
+    values = read_xlsx_values(settings.data_dir / jid / "reporte.xlsx")
+    resumen = {r["Métrica"]: r["Valor"] for r in values["Resumen"]}
+    assert "fallaron" in resumen["Nota juez LLM"]
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_llm_daily_cap_stops_judge(conn, settings):
     respx.post("https://api.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(200, json={"choices": [{"message": {"content":

@@ -271,6 +271,7 @@ def _run_judge(conn, settings, data: ReportData, source_dir: Path, model_ref: st
         items, spec, model,
         max_tokens=settings.llm_max_tokens_per_call,
         max_source_bytes=settings.max_submission_bytes,
+        request_timeout_s=settings.llm_request_timeout_s,
         on_call=functools.partial(_daily_cap_ok, conn, settings, stopped),
         executor=llm_pool,
         total_deadline_s=total_deadline_s,
@@ -292,6 +293,13 @@ def _run_judge(conn, settings, data: ReportData, source_dir: Path, model_ref: st
 
     data.llm_rows = llm_rows
     data.llm_model = model_ref
+    failed = [r for r in results if r.error]
+    if failed and partial_note is None and not stopped.hit and not timed_out.hit:
+        reason = redact(str(failed[-1].error))[:160]
+        partial_note = (
+            f"Juez con IA: {len(failed)} de {len(results)} llamadas fallaron "
+            f"(última causa: {reason})."
+        )
     if stopped.hit:
         partial_note = (
             f"Juez con IA detenido: se alcanzó el tope diario de "

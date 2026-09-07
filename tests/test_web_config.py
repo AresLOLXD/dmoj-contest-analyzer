@@ -26,7 +26,7 @@ def test_defaults_and_required(tmp_path):
     assert s.llm_max_submissions_per_job == 200
     assert s.llm_max_calls_per_day == 2000
     assert s.llm_max_tokens_per_call == 1500
-    assert s.llm_request_timeout_s == 60
+    assert s.llm_request_timeout_s == 120
     assert s.llm_threshold == 70
     assert s.data_dir == tmp_path
     assert s.backends_config == Path("/config/backends.toml")
@@ -53,8 +53,8 @@ def test_env_override(monkeypatch, tmp_path):
 def test_new_scheduling_and_llm_defaults(tmp_path):
     s = Settings(app_secret_key="x", data_dir=tmp_path)
     assert s.max_concurrent_jobs == 2
-    assert s.llm_concurrency == 4
-    assert s.llm_judge_total_timeout_s == 600
+    assert s.llm_concurrency == 2
+    assert s.llm_judge_total_timeout_s == 1800
     assert s.awaiting_upload_timeout_s == 3600
 
 

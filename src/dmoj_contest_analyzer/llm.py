@@ -114,6 +114,10 @@ class JudgeResult:
     ai_score: int | None
     signals: list[str] = field(default_factory=list)
     note: str = ""
+    # Set only when the call itself failed (HTTP error, network timeout, cancelled
+    # by the total deadline). A ``None`` ``ai_score`` with ``error is None`` means
+    # the model responded but its output could not be parsed.
+    error: str | None = None
 
 
 def _parse(content: str, key: tuple[str, str]) -> JudgeResult:

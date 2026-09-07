@@ -121,6 +121,30 @@ def test_run_judge_uses_external_executor_without_closing_it():
 
 
 @respx.mock
+def test_run_judge_marks_failed_calls_with_error():
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(500, headers={"Retry-After": "0"})
+    )
+    spec = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
+    items = [JudgeItem(("u0", "p"), "p", "cpp", "x")]
+    results = run_judge(items, spec, "gpt-4o", max_tokens=100, max_source_bytes=100,
+                        max_workers=1)
+    assert results[0].ai_score is None
+    assert results[0].error is not None
+
+
+@respx.mock
+def test_run_judge_parse_failure_leaves_error_unset():
+    respx.post("https://api.openai.com/v1/chat/completions").mock(return_value=_chat("not json"))
+    spec = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
+    items = [JudgeItem(("u0", "p"), "p", "cpp", "x")]
+    results = run_judge(items, spec, "gpt-4o", max_tokens=100, max_source_bytes=100,
+                        max_workers=1)
+    assert results[0].ai_score is None
+    assert results[0].error is None
+
+
+@respx.mock
 def test_run_judge_total_deadline_cancels_pending():
     def _slow(request):
         import time
