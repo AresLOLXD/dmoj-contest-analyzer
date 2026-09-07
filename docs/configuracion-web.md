@@ -145,6 +145,7 @@ Los nombres son insensibles a mayúsculas. Los defaults salen de
 | `JPLAG_PER_INVOCATION_TIMEOUT_S` | `300` | Tiempo máximo de cada invocación de JPlag dentro de un trabajo. |
 | `RETENTION_H` | `12` | Horas que se conservan los reportes antes de borrarlos. Los `.zip` se borran al terminar el trabajo. |
 | `CLEANUP_EVERY_MIN` | `30` | Cada cuántos minutos corre la limpieza de trabajos vencidos. |
+| `AWAITING_UPLOAD_TIMEOUT_S` | `3600` | Plazo para subir el `.zip` tras crear el trabajo. |
 
 #### Autenticación
 
@@ -163,7 +164,6 @@ Los nombres son insensibles a mayúsculas. Los defaults salen de
 | `LLM_THRESHOLD` | `70` | `llm_ai_score` a partir del cual se considera señal fuerte (solo informativo; no suma a `score_sospecha`). |
 | `LLM_CONCURRENCY` | `4` | Tope global de llamadas simultáneas al LLM (1 = secuencial). |
 | `LLM_JUDGE_TOTAL_TIMEOUT_S` | `600` | Tiempo total máximo del juez con IA por trabajo. |
-| `AWAITING_UPLOAD_TIMEOUT_S` | `3600` | Plazo para subir el `.zip` tras crear el trabajo. |
 
 #### API keys de proveedores
 
