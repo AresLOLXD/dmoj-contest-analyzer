@@ -6,6 +6,7 @@ Run with ``uvicorn dmoj_contest_analyzer.web.app:create_app --factory``.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -54,6 +55,10 @@ def create_app(settings: Settings | None = None, *, start_worker: bool = True) -
         tasks: list[asyncio.Task] = []
         if start_worker:
             app.state.executor = make_executor(settings)
+            app.state.llm_pool = ThreadPoolExecutor(
+                max_workers=settings.llm_concurrency,
+                thread_name_prefix="llm",
+            )
             app.state.stop = asyncio.Event()
             tasks = [
                 asyncio.create_task(worker_loop(app.state, app.state.stop)),
@@ -68,6 +73,7 @@ def create_app(settings: Settings | None = None, *, start_worker: bool = True) -
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
                 app.state.executor.shutdown(wait=False, cancel_futures=True)
+                app.state.llm_pool.shutdown(wait=False, cancel_futures=True)
             conn.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

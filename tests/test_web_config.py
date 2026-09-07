@@ -17,7 +17,7 @@ def test_defaults_and_required(tmp_path):
     assert s.max_submission_bytes == 1000000
     assert s.rate_limit_per_hour == 5
     assert s.max_jobs_per_user == 2
-    assert s.max_concurrent_jobs == 1
+    assert s.max_concurrent_jobs == 2
     assert s.job_timeout_s == 1800
     assert s.jplag_per_invocation_timeout_s == 300
     assert s.retention_h == 12
@@ -48,6 +48,21 @@ def test_env_override(monkeypatch, tmp_path):
     s = Settings()
     assert s.max_upload_mb == 7
     assert s.app_secret_key == "x"
+
+
+def test_new_scheduling_and_llm_defaults(tmp_path):
+    s = Settings(app_secret_key="x", data_dir=tmp_path)
+    assert s.max_concurrent_jobs == 2
+    assert s.llm_concurrency == 4
+    assert s.llm_judge_total_timeout_s == 600
+    assert s.awaiting_upload_timeout_s == 3600
+
+
+def test_llm_concurrency_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_SECRET_KEY", "x")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LLM_CONCURRENCY", "1")
+    assert Settings().llm_concurrency == 1
 
 
 def test_float_timeout():
