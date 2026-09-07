@@ -152,6 +152,10 @@ Genera el secreto con `openssl rand -hex 32` y pégalo en `APP_SECRET_KEY` dentr
 `.env`. Configuración detallada (esquema de `backends.toml` y todos los parámetros
 ajustables) en [`docs/configuracion-web.md`](docs/configuracion-web.md).
 
+Por defecto la web se publica en `127.0.0.1:8000` (loopback, para un proxy inverso
+delante). Para cambiar puerto o dirección, define `WEB_BIND` en `.env`, p. ej.
+`WEB_BIND=127.0.0.1:8080` o `WEB_BIND=0.0.0.0:9000`.
+
 ### Primer arranque
 
 Sin usuarios, solo `/setup` responde. El token (de un solo uso) se imprime en

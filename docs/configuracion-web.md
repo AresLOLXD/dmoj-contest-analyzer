@@ -168,6 +168,22 @@ Para un proveedor no listado, usa el nombre de variable que hayas puesto en
 
 ---
 
+## Puerto y dirección de escucha
+
+`compose.yaml` publica la web en `${WEB_BIND:-127.0.0.1:8000}`. El puerto
+*interno* del contenedor es siempre `8000` (lo usa el healthcheck); solo cambia
+el lado del host. Ejemplos en `.env`:
+
+```bash
+WEB_BIND=127.0.0.1:8080   # otro puerto, sigue solo en loopback (proxy inverso delante)
+WEB_BIND=0.0.0.0:9000     # expuesto en todas las interfaces (sin proxy; usa con cuidado)
+```
+
+`WEB_BIND` se interpola al levantar (no es una variable del contenedor), así que
+tras cambiarla aplica con `docker compose up -d` (o `podman compose up -d`).
+
+---
+
 ## Ejemplos
 
 **Subir el límite de tamaño de subida a 150 MB:**
