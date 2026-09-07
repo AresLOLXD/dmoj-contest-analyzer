@@ -8,6 +8,7 @@ Every ``/jobs/*`` route enforces owner-only access.
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -31,6 +32,8 @@ from dmoj_contest_analyzer import llm
 from . import auth, jobs
 from .db import utcnow
 from .upload import UploadRejected, stream_to_file
+
+log = logging.getLogger(__name__)
 
 _HERE = Path(__file__).parent
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -114,12 +117,14 @@ def _visible_backends(request):
 async def healthz(request: Request) -> Response:
     settings = _settings(request)
     try:
-        ro = sqlite3.connect(f"file:{settings.db_path()}?mode=ro", uri=True)
-        ro.execute("SELECT 1 FROM sqlite_master LIMIT 1")
-        ro.close()
+        # Reuse the app's live connection — a separate mode=ro open of a WAL
+        # database is fragile (needs -shm access). This proves the real
+        # connection is alive, which is what matters.
+        request.app.state.conn.execute("SELECT 1").fetchone()
         if not Path(settings.jplag_jar).exists():
-            raise RuntimeError("jplag jar missing")
+            raise RuntimeError(f"jplag jar missing at {settings.jplag_jar}")
     except Exception:
+        log.exception("healthz check failed")
         return PlainTextResponse("unhealthy", status_code=503)
     return PlainTextResponse("ok")
 

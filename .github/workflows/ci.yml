@@ -74,7 +74,10 @@ jobs:
             sleep 2
           done
           echo "healthz never became ready"
-          docker compose -f compose.yaml -f compose.ci.yaml logs
+          C="docker compose -f compose.yaml -f compose.ci.yaml"
+          $C logs
+          echo "--- container diagnostics ---"
+          $C exec -T analyzer sh -c 'id; echo JPLAG_JAR=$JPLAG_JAR; ls -la /opt/jplag/ /data/ /config/ || true' || true
           exit 1
 
       - name: Assert resource limits applied
