@@ -18,6 +18,13 @@ def test_run_analysis_matches_cli_output(mini_export_tree, tmp_path):
     assert any("envío" in m or "envio" in m for m in msgs)
 
 
+def test_run_analysis_emits_finer_progress(mini_export_tree, tmp_path):
+    out = tmp_path / "r.xlsx"
+    msgs: list[str] = []
+    run_analysis(mini_export_tree, out, AnalysisOptions(), on_progress=msgs.append)
+    assert any(m.startswith("timing y estilo: ") for m in msgs)
+
+
 @respx.mock
 def test_run_analysis_runs_llm_judge(mini_export_tree, tmp_path):
     respx.post("https://api.openai.com/v1/chat/completions").mock(
