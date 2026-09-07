@@ -27,8 +27,9 @@ requieren evidencia adicional.
 - El CLI `dmoj-contest-analyzer` no necesita nada nuevo para timing/estilo/JPlag.
 - Solo si vas a usar el juez LLM (`--run-llm`): un endpoint compatible con la API
   de OpenAI accesible (Ollama, LM Studio, OpenAI, etc.).
-- Solo para la interfaz web (opcional): **Docker** y **Docker Compose**. Java y el
-  `.jar` de JPlag ya vienen dentro de la imagen.
+- Solo para la interfaz web (opcional): **Docker** y **Docker Compose** (o Podman).
+  Java viene dentro de la imagen; el `.jar` de JPlag se descarga a `vendor/` al
+  construir (ver [Despliegue web](#despliegue-web-opcional)).
 
 ## Instalación
 
@@ -122,7 +123,8 @@ La interfaz web es **opcional**: el CLI sigue funcionando por sí solo. Sirve pa
 que un jurado suba el `.zip` desde el navegador y descargue el reporte, con
 autenticación y límites de abuso.
 
-**Requisitos:** Docker y Docker Compose. Java y JPlag ya vienen en la imagen.
+**Requisitos:** Docker y Docker Compose (o Podman ≥ 4 con `podman compose`). Java
+ya viene en la imagen; el `.jar` de JPlag se descarga al construir (ver abajo).
 
 ### Puesta en marcha
 
@@ -130,8 +132,21 @@ autenticación y límites de abuso.
 cp backends.example.toml backends.toml       # modelos, URLs y backends del juez LLM
 cp .env.example .env                          # y edítalo: APP_SECRET_KEY, API keys, límites
 mkdir -p data && sudo chown -R 10001:10001 data   # uid del contenedor; si no, EACCES al crear la DB
+
+# El .jar de JPlag no está en el repo; descárgalo a vendor/ antes de construir
+mkdir -p vendor
+curl -fsSL -o vendor/jplag-6.3.0-jar-with-dependencies.jar \
+  https://github.com/jplag/JPlag/releases/download/v6.3.0/jplag-6.3.0-jar-with-dependencies.jar
+echo "5f2c21e8b88ed77134effcb3a5a3ab13d188f6a3e16d401387f7479e92db9aa2  vendor/jplag-6.3.0-jar-with-dependencies.jar" | sha256sum -c -
+
 docker compose up -d
 ```
+
+**Con Podman:** usa `podman compose up -d`. Necesita el servicio activo
+(`systemctl --user start podman.socket`). En hosts con SELinux en modo
+enforcing, si `podman compose build` falla con `Permission denied` leyendo un
+archivo del contexto, construye aparte y levanta sin reconstruir:
+`podman build -t dmoj-contest-analyzer:local . && podman compose up -d --no-build`.
 
 Genera el secreto con `openssl rand -hex 32` y pégalo en `APP_SECRET_KEY` dentro de
 `.env`. Configuración detallada (esquema de `backends.toml` y todos los parámetros
