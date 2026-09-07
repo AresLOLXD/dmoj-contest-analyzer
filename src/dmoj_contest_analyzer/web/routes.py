@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 _HERE = Path(__file__).parent
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_MAX_OPTIONS_FORM_BYTES = 16 * 1024
 
 _env = Environment(
     loader=FileSystemLoader(_HERE / "templates"),
@@ -315,6 +316,12 @@ async def create_job_route(request: Request) -> Response:
     settings = _settings(request)
     conn = _conn(request)
 
+    content_length = request.headers.get("content-length")
+    if content_length is None or not content_length.isdigit():
+        raise HttpError(411, "Falta el encabezado Content-Length.")
+    if int(content_length) > _MAX_OPTIONS_FORM_BYTES:
+        raise HttpError(413)
+
     form = await request.form()
     await _check_csrf(request, form)
 
@@ -351,10 +358,7 @@ async def job_upload(request: Request, job_id: str) -> Response:
     conn = _conn(request)
     row = _load_owned_job(request, job_id, user.username)
 
-    token = request.headers.get("x-csrf-token")
-    if token is None:
-        form = await request.form()
-        token = str(form.get("csrf", ""))
+    token = request.headers.get("x-csrf-token", "")
     _check_csrf_value(request, token)
 
     if row["status"] != "awaiting_upload":
@@ -367,14 +371,20 @@ async def job_upload(request: Request, job_id: str) -> Response:
     if int(content_length) > max_bytes:
         raise HttpError(413)
 
-    dest = Path(settings.data_dir) / job_id / "input.zip"
+    job_dir = Path(settings.data_dir) / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job_dir.chmod(0o700)
+
+    dest = job_dir / "input.zip"
     try:
         await stream_body_to_file(request, dest, max_bytes)
     except UploadRejected as exc:
         dest.unlink(missing_ok=True)
         raise HttpError(exc.status, exc.reason) from exc
 
-    jobs.set_status(conn, job_id, "queued")
+    if not jobs.mark_uploaded(conn, job_id):
+        dest.unlink(missing_ok=True)
+        raise HttpError(409)
     request.app.state.nudge.set()
     return Response(status_code=204)
 

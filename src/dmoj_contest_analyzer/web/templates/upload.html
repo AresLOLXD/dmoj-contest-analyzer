@@ -3,10 +3,8 @@
 {% block head %}<script src="/static/app.js" defer></script>{% endblock %}
 {% block content %}
 <h1>Subir export de concurso</h1>
-<form method="post" action="/jobs" enctype="multipart/form-data">
+<form method="post" action="/jobs">
   <input type="hidden" name="csrf" value="{{ csrf }}">
-  <label>Archivo .zip del export
-    <input type="file" name="archivo" accept=".zip" required></label>
   <label>Juez con IA (opcional)
     <select name="model_ref" id="model_ref" data-models-url="/api/models">
       <option value="none">(ninguno — solo timing/estilo/JPlag)</option>
@@ -15,6 +13,6 @@
   <label><input type="checkbox" name="run_jplag" value="true"> Ejecutar JPlag</label>
   <label><input type="checkbox" name="jplag_solo_ac" value="true">
     JPlag solo con envíos AC</label>
-  <button type="submit">Analizar</button>
+  <button type="submit">Continuar</button>
 </form>
 {% endblock %}

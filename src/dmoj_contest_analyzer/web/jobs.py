@@ -99,6 +99,15 @@ def set_status(
     conn.execute(f"UPDATE jobs SET {', '.join(fields)} WHERE id=?", params)
 
 
+def mark_uploaded(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Atomically flip ``awaiting_upload`` -> ``queued``. Returns True on success."""
+    cur = conn.execute(
+        "UPDATE jobs SET status='queued' WHERE id=? AND status='awaiting_upload'",
+        (job_id,),
+    )
+    return cur.rowcount == 1
+
+
 def set_progress(conn: sqlite3.Connection, job_id: str, text: str) -> None:
     conn.execute(
         "UPDATE jobs SET progress=? WHERE id=?", (redact(text), job_id)

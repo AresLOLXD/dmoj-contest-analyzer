@@ -456,9 +456,14 @@ def _cleanup_once(conn, settings) -> None:
         "SELECT id FROM jobs WHERE status='awaiting_upload' AND created_at < ?",
         (upload_cutoff,),
     ).fetchall()
-    for r in stale_uploads:
-        shutil.rmtree(settings.data_dir / r["id"], ignore_errors=True)
+    stale_ids = [r["id"] for r in stale_uploads]
     jobs.sweep_stale(conn, settings)
+    for jid in stale_ids:
+        # Only reap the dir if sweep_stale actually failed the row. A PUT that
+        # raced in during the window flips it to 'queued' and must keep input.zip.
+        row = jobs.get_job(conn, jid)
+        if row is not None and row["status"] == "failed":
+            shutil.rmtree(settings.data_dir / jid, ignore_errors=True)
 
 
 async def _wait_for_work(stop: asyncio.Event, nudge: asyncio.Event, timeout: float) -> None:

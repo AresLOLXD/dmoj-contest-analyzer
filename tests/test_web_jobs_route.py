@@ -62,7 +62,6 @@ def test_post_job_success(client, settings):
     assert _login(client).status_code == 303
     token = _csrf(client.get("/").text)
     jid = _create_job(client, token)
-    assert "/jobs/" in f"/jobs/{jid}"
 
     c = connect(settings.db_path())
     assert jobs.get_job(c, jid)["status"] == "awaiting_upload"
@@ -76,6 +75,26 @@ def test_post_job_success(client, settings):
     assert jobs.get_job(c, jid)["status"] == "queued"
     assert (settings.data_dir / jid / "input.zip").read_bytes() == zip_bytes
     c.close()
+
+
+def test_index_form_has_no_file_input(client):
+    """C1: the `/` form posts options only; the file picker lives on the job page."""
+    _login(client)
+    html = client.get("/").text
+    assert 'type="file"' not in html
+    assert "enctype=" not in html
+
+
+def test_post_job_rejects_oversize_options_form(client):
+    """C2: a body above the small options cap is rejected before form parsing."""
+    _login(client)
+    token = _csrf(client.get("/").text)
+    r = client.post(
+        "/jobs",
+        data={"csrf": token, "junk": "x" * (17 * 1024)},
+        follow_redirects=False,
+    )
+    assert r.status_code == 413
 
 
 def test_security_headers_present(client):
@@ -253,7 +272,23 @@ def test_job_page_awaiting_upload_renders_upload_widget(client, settings):
     html = client.get(f"/jobs/{jid}").text
     assert 'id="upload"' in html
     assert f'data-job-id="{jid}"' in html
+    assert "data-csrf=" in html
     assert "/static/upload.js" in html
+
+
+def test_job_page_queued_has_no_upload_widget(client, settings):
+    _login(client)
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    zb = make_zip(GOOD)
+    client.put(
+        f"/jobs/{jid}/upload",
+        content=zb,
+        headers={"X-CSRF-Token": token, "Content-Length": str(len(zb))},
+    )
+    html = client.get(f"/jobs/{jid}").text
+    assert 'id="upload"' not in html
+    assert "/static/upload.js" not in html
 
 
 def test_healthz_unhealthy_without_jar(client):

@@ -462,6 +462,34 @@ def test_cleanup_once_reaps_stale_awaiting_upload_dir(conn, settings):
     assert not (settings.data_dir / jid).exists()
 
 
+def test_cleanup_once_keeps_dir_when_put_races_to_queued(conn, settings, monkeypatch):
+    """I3: a stale awaiting_upload row flipped to 'queued' by an in-flight PUT
+    during the cleanup window must keep its input.zip."""
+    settings.awaiting_upload_timeout_s = 1
+    jid = uuid.uuid4().hex
+    (settings.data_dir / jid).mkdir(parents=True)
+    (settings.data_dir / jid / "input.zip").write_bytes(b"just uploaded")
+    jobs.create_job(conn, job_id=jid, owner="alice", model_ref=None,
+                    run_jplag=False, jplag_solo_ac=False, settings=settings,
+                    status="awaiting_upload")
+    # Only mildly stale: old enough for the awaiting_upload timeout, but not the
+    # much larger queued/running staleness window.
+    conn.execute("UPDATE jobs SET created_at=? WHERE id=?",
+                 (jobs._minus_seconds(utcnow(), 5), jid))
+
+    real_sweep = jobs.sweep_stale
+
+    def racing_sweep(c, s):
+        jobs.mark_uploaded(c, jid)  # the PUT lands mid-cleanup
+        real_sweep(c, s)
+
+    monkeypatch.setattr(worker.jobs, "sweep_stale", racing_sweep)
+    worker._cleanup_once(conn, settings)
+
+    assert jobs.get_job(conn, jid)["status"] == "queued"
+    assert (settings.data_dir / jid / "input.zip").exists()
+
+
 @pytest.mark.asyncio
 async def test_timeout_kills_pool_worker_processes(conn, settings, monkeypatch):
     """A timed-out subprocess must be killed, not merely abandoned (I8)."""
