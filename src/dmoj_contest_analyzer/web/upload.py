@@ -65,6 +65,32 @@ async def stream_to_file(upload: _AsyncReader, dest: Path, max_bytes: int) -> No
         raise
 
 
+async def stream_body_to_file(request, dest: Path, max_bytes: int) -> int:
+    """Stream ``request``'s raw body to ``dest`` in chunks under ``max_bytes``.
+
+    Returns the byte count. On overflow the partial file is unlinked and
+    ``UploadRejected(413, ...)`` is raised. Used by the two-step upload's
+    ``PUT /jobs/{id}/upload`` (raw body, not multipart).
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    try:
+        with dest.open("wb") as fh:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > max_bytes:
+                    raise UploadRejected(
+                        413, f"El archivo supera el límite de {max_bytes} bytes."
+                    )
+                fh.write(chunk)
+    except UploadRejected:
+        dest.unlink(missing_ok=True)
+        raise
+    return written
+
+
 def _is_unsafe_name(name: str) -> bool:
     normalized = name.replace("\\", "/")
     if normalized.startswith("/"):
