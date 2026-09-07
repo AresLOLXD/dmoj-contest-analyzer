@@ -203,7 +203,7 @@ Nota: la cookie de sesión es `Secure`, así que el login solo funciona sobre HT
 
 ### Flujo de subida en dos pasos
 
-La subida se hace en dos pasos: al pulsar *Analizar* se crea el trabajo y la página del trabajo muestra el selector de archivo, que sube el `.zip` con una barra de progreso. Esto evita el timeout de proxies como Cloudflare en subidas lentas.
+La subida se hace en dos pasos: al pulsar *Analizar* se crea el trabajo y la página del trabajo muestra el selector de archivo, que sube el `.zip` con una barra de progreso. Esto evita el timeout de proxies como Cloudflare en subidas lentas. Desde el enlace "Mis trabajos" en la cabecera puedes ver el listado de tus últimos 50 trabajos con su estado actual.
 
 ### Anti-abuso (resumen)
 

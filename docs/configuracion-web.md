@@ -184,6 +184,12 @@ La subida se hace en dos pasos: al pulsar *Analizar* se crea el trabajo y la pá
 
 ---
 
+## Página "Mis trabajos"
+
+La página *Mis trabajos* (`/jobs`, accesible por un enlace en la cabecera) lista tus últimos 50 trabajos con su estado actual (etiquetas de color) y un enlace a cada uno. Se refresca automáticamente cada 10 segundos mientras haya al menos un trabajo en cola o en ejecución; una vez todos han terminado, la recarga se detiene. Desde esta página puedes navegar a cualquier trabajo para ver su progreso en tiempo real: tiempo transcurrido, última señal recibida del análisis, y los mensajes de cada etapa.
+
+---
+
 ## Puerto y dirección de escucha
 
 `compose.yaml` publica la web en `${WEB_BIND:-127.0.0.1:8000}`. El puerto
