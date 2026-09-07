@@ -74,3 +74,26 @@ def test_jobs_list_meta_refresh_only_when_active(client, settings):
 def test_jobs_list_empty_message(client):
     _login(client)
     assert "Aún no tienes trabajos" in client.get("/jobs").text
+
+
+def _seed_job(settings, owner, jid, created_at):
+    c = connect(settings.db_path())
+    c.execute(
+        "INSERT INTO jobs(id,owner,status,created_at) VALUES (?,?,?,?)",
+        (jid, owner, "done", created_at),
+    )
+    c.close()
+
+
+def test_jobs_list_orders_by_created_desc_and_caps_at_50(client, settings):
+    def jid(i):
+        return "a" * 30 + f"{i:02d}"
+
+    for i in range(55):
+        _seed_job(settings, "alice", jid(i), f"2026-09-06T00:{i:02d}:00.000000Z")
+    _login(client, "alice")
+    html = client.get("/jobs").text
+
+    assert html.index(jid(54)) < html.index(jid(5))  # newest before oldest shown
+    assert jid(4) not in html  # beyond the 50-row cap
+    assert jid(54) in html
