@@ -28,10 +28,37 @@ def test_utcnow_format():
 def test_migrate_sets_user_version(settings):
     c = connect(settings.db_path())
     migrate(c)
-    assert c.execute("PRAGMA user_version").fetchone()[0] >= 1
+    assert c.execute("PRAGMA user_version").fetchone()[0] >= 2
     # idempotent
     migrate(c)
     c.close()
+
+
+def test_migration_1_adds_progress_at(settings):
+    c = connect(settings.db_path())
+    migrate(c)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
+    assert "progress_at" in cols
+    assert c.execute("PRAGMA user_version").fetchone()[0] >= 2
+    migrate(c)  # idempotent
+    c.close()
+
+
+def test_set_progress_stamps_progress_at(conn, settings):
+    jid = "a" * 32
+    jobs.create_job(
+        conn,
+        job_id=jid,
+        owner="alice",
+        model_ref=None,
+        run_jplag=False,
+        jplag_solo_ac=False,
+        settings=settings,
+    )
+    jobs.set_progress(conn, jid, "parseando envíos")
+    row = jobs.get_job(conn, jid)
+    assert row["progress"] == "parseando envíos"
+    assert row["progress_at"] is not None
 
 
 def test_rate_limit_enforced(conn, settings):

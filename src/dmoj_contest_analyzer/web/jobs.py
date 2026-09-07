@@ -110,7 +110,8 @@ def mark_uploaded(conn: sqlite3.Connection, job_id: str) -> bool:
 
 def set_progress(conn: sqlite3.Connection, job_id: str, text: str) -> None:
     conn.execute(
-        "UPDATE jobs SET progress=? WHERE id=?", (redact(text), job_id)
+        "UPDATE jobs SET progress=?, progress_at=? WHERE id=?",
+        (redact(text), utcnow(), job_id),
     )
 
 

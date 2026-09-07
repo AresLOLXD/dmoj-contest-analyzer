@@ -93,7 +93,11 @@ def _migration_0(conn: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_0]
+def _migration_1(conn: sqlite3.Connection) -> None:
+    conn.execute("ALTER TABLE jobs ADD COLUMN progress_at TEXT")
+
+
+_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_0, _migration_1]
 
 
 def migrate(conn: sqlite3.Connection) -> None:
