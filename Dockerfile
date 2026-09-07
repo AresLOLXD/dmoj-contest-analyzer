@@ -35,7 +35,11 @@ ENV JAVA_HOME=/opt/java/openjdk \
 # The package is installed non-editable into /app/.venv, so no source tree is needed.
 COPY --chmod=0644 vendor/jplag-6.3.0-jar-with-dependencies.jar /opt/jplag/jplag.jar
 COPY --from=build /app/.venv /app/.venv
-RUN useradd -u 10001 -m appuser && mkdir -p /data && chown 10001:10001 /data
+# The `.keep` file makes /data non-empty so a fresh Docker named volume mounted
+# here inherits appuser ownership (an empty dir yields a root-owned volume that
+# the non-root process cannot write, and /healthz then 503s forever).
+RUN useradd -u 10001 -m appuser \
+    && mkdir -p /data && touch /data/.keep && chown -R 10001:10001 /data
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
