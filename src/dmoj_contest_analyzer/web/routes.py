@@ -389,6 +389,21 @@ async def job_upload(request: Request, job_id: str) -> Response:
     return Response(status_code=204)
 
 
+_ACTIVE_STATUSES = ("awaiting_upload", "queued", "running")
+
+
+@router.get("/jobs")
+async def jobs_list(request: Request) -> Response:
+    user = require_user(request)
+    rows = _conn(request).execute(
+        "SELECT id, status, created_at, finished_at, model_ref, error "
+        "FROM jobs WHERE owner=? ORDER BY created_at DESC LIMIT 50",
+        (user.username,),
+    ).fetchall()
+    has_active = any(r["status"] in _ACTIVE_STATUSES for r in rows)
+    return render("jobs_list.html", request, jobs=rows, has_active=has_active)
+
+
 @router.get("/jobs/{job_id}")
 async def job_page(request: Request, job_id: str) -> Response:
     user = require_user(request)

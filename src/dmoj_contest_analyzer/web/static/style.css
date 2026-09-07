@@ -22,3 +22,14 @@ button { padding: 0.5rem 1rem; cursor: pointer; width: fit-content; }
 .mono { font-family: ui-monospace, monospace; word-break: break-all; }
 #upload { margin: 1rem 0; padding: 1rem; border: 1px solid #8888; border-radius: 4px; }
 #uploadprogress { display: block; width: 100%; margin-top: 0.5rem; }
+.badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 3px;
+         font-size: 0.85em; color: #fff; }
+.badge-awaiting_upload { background: #8a6d3b; }
+.badge-queued          { background: #777; }
+.badge-running         { background: #2f6fbf; }
+.badge-done            { background: #2e7d32; }
+.badge-failed          { background: #b71c1c; }
+.badge-cancelled       { background: #555; }
+table.jobs { border-collapse: collapse; width: 100%; }
+table.jobs th, table.jobs td { text-align: left; padding: 0.35rem 0.5rem;
+                               border-bottom: 1px solid #ddd; }
