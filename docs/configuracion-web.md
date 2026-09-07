@@ -140,7 +140,7 @@ Los nombres son insensibles a mayúsculas. Los defaults salen de
 | --- | --- | --- |
 | `RATE_LIMIT_PER_HOUR` | `5` | Trabajos que un usuario puede encolar por hora. |
 | `MAX_JOBS_PER_USER` | `2` | Trabajos simultáneos en cola o en ejecución por usuario. |
-| `MAX_CONCURRENT_JOBS` | `1` | Trabajos que el worker procesa a la vez (global). |
+| `MAX_CONCURRENT_JOBS` | `2` | Trabajos de análisis en paralelo; el resto en cola. |
 | `JOB_TIMEOUT_S` | `1800` | Tiempo máximo total de un trabajo antes de abortarlo. |
 | `JPLAG_PER_INVOCATION_TIMEOUT_S` | `300` | Tiempo máximo de cada invocación de JPlag dentro de un trabajo. |
 | `RETENTION_H` | `12` | Horas que se conservan los reportes antes de borrarlos. Los `.zip` se borran al terminar el trabajo. |
@@ -161,6 +161,9 @@ Los nombres son insensibles a mayúsculas. Los defaults salen de
 | `LLM_MAX_TOKENS_PER_CALL` | `1500` | Límite de tokens de salida por llamada. |
 | `LLM_REQUEST_TIMEOUT_S` | `60` | Timeout de cada petición HTTP al proveedor. |
 | `LLM_THRESHOLD` | `70` | `llm_ai_score` a partir del cual se considera señal fuerte (solo informativo; no suma a `score_sospecha`). |
+| `LLM_CONCURRENCY` | `4` | Tope global de llamadas simultáneas al LLM (1 = secuencial). |
+| `LLM_JUDGE_TOTAL_TIMEOUT_S` | `600` | Tiempo total máximo del juez con IA por trabajo. |
+| `AWAITING_UPLOAD_TIMEOUT_S` | `3600` | Plazo para subir el `.zip` tras crear el trabajo. |
 
 #### API keys de proveedores
 
@@ -172,6 +175,12 @@ Los nombres son insensibles a mayúsculas. Los defaults salen de
 
 Para un proveedor no listado, usa el nombre de variable que hayas puesto en
 `api_key_env` y añádelo también al bloque `environment:` de `compose.yaml`.
+
+---
+
+## Flujo de subida en dos pasos
+
+La subida se hace en dos pasos: al pulsar *Analizar* se crea el trabajo y la página del trabajo muestra el selector de archivo, que sube el `.zip` con una barra de progreso. Esto evita el timeout de proxies como Cloudflare en subidas lentas.
 
 ---
 
