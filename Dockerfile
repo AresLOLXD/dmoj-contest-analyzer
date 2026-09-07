@@ -33,7 +33,11 @@ ENV JAVA_HOME=/opt/java/openjdk \
     JPLAG_JAR=/opt/jplag/jplag.jar
 # Vendored jar copied BEFORE the venv layer so a code change does not re-copy 83 MB.
 # The package is installed non-editable into /app/.venv, so no source tree is needed.
-COPY --chmod=0644 vendor/jplag-6.3.0-jar-with-dependencies.jar /opt/jplag/jplag.jar
+# NOTE: no `--chmod` on the COPY -- BuildKit applies it to the auto-created parent
+# dir too, leaving /opt/jplag at 0644 (no execute bit), so a non-root process gets
+# EACCES stat-ing the jar. Pre-create the dir 0755; the vendored jar is 0644.
+RUN mkdir -p /opt/jplag && chmod 0755 /opt/jplag
+COPY vendor/jplag-6.3.0-jar-with-dependencies.jar /opt/jplag/jplag.jar
 COPY --from=build /app/.venv /app/.venv
 # The `.keep` file makes /data non-empty so a fresh Docker named volume mounted
 # here inherits appuser ownership (an empty dir yields a root-owned volume that
