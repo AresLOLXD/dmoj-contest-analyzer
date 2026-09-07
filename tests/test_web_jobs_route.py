@@ -246,6 +246,16 @@ def test_cancel_awaiting_upload_job(client, settings):
     c.close()
 
 
+def test_job_page_awaiting_upload_renders_upload_widget(client, settings):
+    _login(client)
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    html = client.get(f"/jobs/{jid}").text
+    assert 'id="upload"' in html
+    assert f'data-job-id="{jid}"' in html
+    assert "/static/upload.js" in html
+
+
 def test_healthz_unhealthy_without_jar(client):
     assert client.get("/healthz").status_code == 503
 

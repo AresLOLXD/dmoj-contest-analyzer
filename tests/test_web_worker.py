@@ -444,6 +444,24 @@ async def test_worker_writes_isolated_from_handler_rollback(conn, settings, monk
     assert row["progress"] == "procesando envíos"
 
 
+def test_cleanup_once_reaps_stale_awaiting_upload_dir(conn, settings):
+    settings.awaiting_upload_timeout_s = 1
+    jid = uuid.uuid4().hex
+    (settings.data_dir / jid).mkdir(parents=True)
+    (settings.data_dir / jid / "input.zip").write_bytes(b"partial")
+    jobs.create_job(conn, job_id=jid, owner="alice", model_ref=None,
+                    run_jplag=False, jplag_solo_ac=False, settings=settings,
+                    status="awaiting_upload")
+    conn.execute("UPDATE jobs SET created_at=? WHERE id=?",
+                 ("2000-01-01T00:00:00.000000Z", jid))
+
+    worker._cleanup_once(conn, settings)
+
+    row = jobs.get_job(conn, jid)
+    assert row["status"] == "failed"
+    assert not (settings.data_dir / jid).exists()
+
+
 @pytest.mark.asyncio
 async def test_timeout_kills_pool_worker_processes(conn, settings, monkeypatch):
     """A timed-out subprocess must be killed, not merely abandoned (I8)."""

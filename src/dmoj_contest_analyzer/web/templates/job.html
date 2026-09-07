@@ -2,17 +2,29 @@
 {% block title %}Trabajo {{ job.id }}{% endblock %}
 {% block head %}
 {% if job.status in ("queued", "running") %}<meta http-equiv="refresh" content="3">{% endif %}
+{% if job.status == "awaiting_upload" %}<script src="/static/upload.js" defer></script>{% endif %}
 {% endblock %}
 {% block content %}
 <h1>Trabajo</h1>
 <p class="mono">{{ job.id }}</p>
 <p>Estado: <strong>{{ job.status }}</strong></p>
+
+{% if job.status == "awaiting_upload" %}
+<div id="upload" data-job-id="{{ job.id }}" data-csrf="{{ csrf }}">
+  <p>Selecciona el <code>.zip</code> del export para empezar el análisis.</p>
+  <input type="file" id="zipfile" accept=".zip">
+  <button type="button" id="uploadbtn">Subir</button>
+  <progress id="uploadprogress" max="100" value="0" hidden></progress>
+  <p id="uploadmsg" class="error" hidden></p>
+</div>
+{% endif %}
+
 {% if job.progress %}<p>Progreso: {{ job.progress }}</p>{% endif %}
 {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
 {% if job.status == "done" %}
 <p><a href="/jobs/{{ job.id }}/report">Descargar reporte (.xlsx)</a></p>
 {% endif %}
-{% if job.status == "queued" %}
+{% if job.status in ("queued", "awaiting_upload") %}
 <form method="post" action="/jobs/{{ job.id }}/cancel">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <button type="submit">Cancelar</button>

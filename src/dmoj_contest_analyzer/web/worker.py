@@ -448,6 +448,16 @@ def _cleanup_once(conn, settings) -> None:
     for r in expired:
         shutil.rmtree(settings.data_dir / r["id"], ignore_errors=True)
         conn.execute("DELETE FROM jobs WHERE id = ?", (r["id"],))
+    upload_cutoff = (
+        datetime.strptime(utcnow(), TIMESTAMP_FORMAT)
+        - timedelta(seconds=settings.awaiting_upload_timeout_s)
+    ).strftime(TIMESTAMP_FORMAT)
+    stale_uploads = conn.execute(
+        "SELECT id FROM jobs WHERE status='awaiting_upload' AND created_at < ?",
+        (upload_cutoff,),
+    ).fetchall()
+    for r in stale_uploads:
+        shutil.rmtree(settings.data_dir / r["id"], ignore_errors=True)
     jobs.sweep_stale(conn, settings)
 
 
