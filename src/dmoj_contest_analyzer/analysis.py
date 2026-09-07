@@ -12,10 +12,10 @@ from dmoj_contest_analyzer.jplag import (
     run_jplag,
 )
 from dmoj_contest_analyzer.llm import BackendSpec, JudgeItem
+from dmoj_contest_analyzer.llm_run import run_judge
 from dmoj_contest_analyzer.report import write_excel_report
 from dmoj_contest_analyzer.submissions import EXT_TO_JPLAG_LANG, parse_submissions
 from dmoj_contest_analyzer.timing import analyze_timing_style
-from dmoj_contest_analyzer.web.llm_run import run_judge
 
 Progress = Callable[[str], None]
 
@@ -136,13 +136,17 @@ def _run_llm_judge(
     items: list[JudgeItem] = []
     for r in rows:
         src_path = source_dir / r["archivo"]
+        try:
+            source = src_path.read_text(errors="replace")
+        except OSError:
+            continue
         ext = src_path.suffix.lstrip(".").lower()
         language = EXT_TO_JPLAG_LANG.get(ext, ext)
         items.append(JudgeItem(
             key=(r["usuario"], r["problema"]),
             problem=r["problema"],
             language=language,
-            source=src_path.read_text(errors="replace"),
+            source=source,
         ))
 
     on_progress(f"análisis con IA de {len(items)} envíos ({model_ref})")

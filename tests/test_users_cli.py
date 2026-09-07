@@ -69,6 +69,30 @@ def test_reset_password(tmp_path, monkeypatch):
     assert row["must_change_password"] == 1
 
 
+def test_reset_password_revokes_sessions(tmp_path, monkeypatch):
+    """reset-password must invalidate any live session (I6)."""
+    from dmoj_contest_analyzer.web import auth
+
+    monkeypatch.setattr("getpass.getpass", lambda *a, **k: "pw12345")
+    users_cli.main(["--data-dir", str(tmp_path), "add", "eve", "--no-force-change"])
+
+    conn = db.connect(tmp_path / "state.db")
+    settings = _settings(tmp_path)
+    sid = auth.create_session(conn, "eve", settings)
+    assert auth.load_session(conn, sid) is not None
+
+    monkeypatch.setattr("getpass.getpass", lambda *a, **k: "new12345")
+    users_cli.main(["--data-dir", str(tmp_path), "reset-password", "eve"])
+
+    assert auth.load_session(db.connect(tmp_path / "state.db"), sid) is None
+
+
+def _settings(tmp_path):
+    from dmoj_contest_analyzer.web.config import Settings
+
+    return Settings(app_secret_key="t", data_dir=tmp_path)
+
+
 def test_disable_missing_exits(tmp_path):
     with pytest.raises(SystemExit) as exc:
         users_cli.main(["--data-dir", str(tmp_path), "disable", "ghost"])

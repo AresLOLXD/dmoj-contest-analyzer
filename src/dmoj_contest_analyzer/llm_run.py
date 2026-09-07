@@ -33,11 +33,19 @@ def run_judge(
 
     with httpx.Client(follow_redirects=False, timeout=60) as client:
         with ThreadPoolExecutor(max_workers=min(max_workers, len(allowed))) as pool:
-            futures = [
+            futures = {
                 pool.submit(
                     judge_one, client, spec, model, item,
                     max_tokens=max_tokens, max_source_bytes=max_source_bytes,
-                )
+                ): item
                 for item in allowed
-            ]
-            return [f.result() for f in futures]
+            }
+            results: list[JudgeResult] = []
+            for future, item in futures.items():
+                try:
+                    results.append(future.result())
+                except Exception:
+                    # A single failing call must not abort the batch; the caller
+                    # surfaces ``ai_score=None`` as "not judged".
+                    results.append(JudgeResult(item.key, None))
+            return results

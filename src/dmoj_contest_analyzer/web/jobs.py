@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from dmoj_contest_analyzer.llm import redact
 
 from .config import Settings
-from .db import _TIMESTAMP_FORMAT, utcnow
+from .db import TIMESTAMP_FORMAT, utcnow
 
 # Multiplier applied to ``job_timeout_s`` to decide a queued/running job is stale
 # and should be failed so it stops holding a quota slot and participant source.
@@ -89,7 +89,7 @@ def set_status(
     params: list[object] = [status]
     if error is not None:
         fields.append("error=?")
-        params.append(redact(error))
+        params.append(redact(error)[:500])
     if finished:
         fields.append("finished_at=?")
         params.append(utcnow())
@@ -144,5 +144,5 @@ def _minus_one_hour(now: str) -> str:
 
 
 def _minus_seconds(now: str, seconds: float) -> str:
-    parsed = datetime.strptime(now, _TIMESTAMP_FORMAT)
-    return (parsed - timedelta(seconds=seconds)).strftime(_TIMESTAMP_FORMAT)
+    parsed = datetime.strptime(now, TIMESTAMP_FORMAT)
+    return (parsed - timedelta(seconds=seconds)).strftime(TIMESTAMP_FORMAT)

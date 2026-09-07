@@ -12,12 +12,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+# Backwards-compatible private alias.
+_TIMESTAMP_FORMAT = TIMESTAMP_FORMAT
 
 
 def utcnow() -> str:
     """Return the current UTC time in the fixed lexicographically-sortable format."""
-    return datetime.now(UTC).strftime(_TIMESTAMP_FORMAT)
+    return datetime.now(UTC).strftime(TIMESTAMP_FORMAT)
 
 
 def connect(path: Path) -> sqlite3.Connection:

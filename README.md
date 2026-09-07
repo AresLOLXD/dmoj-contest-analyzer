@@ -164,6 +164,14 @@ permite la subred de Docker (`172.16.0.0/12`) hacia los puertos `11434` (Ollama)
 El contenedor publica solo en `127.0.0.1:8000`. Pon delante un reverse proxy que
 termine TLS (Caddy, nginx, Traefik). Ver `Caddyfile.example`.
 
+El proxy **debe** enviar `X-Forwarded-For`; la imagen corre uvicorn con
+`--proxy-headers --forwarded-allow-ips 127.0.0.1` para que el rate limit de login
+identifique al cliente real y no al proxy. Si cambias la dirección del proxy,
+ajusta `--forwarded-allow-ips` a esa dirección — **nunca uses `*`**.
+
+Nota: la cookie de sesión es `Secure`, así que el login solo funciona sobre HTTPS
+(o `127.0.0.1`). Sobre una IP de LAN en HTTP el login falla en silencio.
+
 ### Anti-abuso (resumen)
 
 Autenticación obligatoria, límite de tamaño de subida, rate limit y cupos por

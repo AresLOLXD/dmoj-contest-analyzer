@@ -72,6 +72,25 @@ def test_security_headers_present(client):
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
 
 
+def test_post_job_rejects_missing_content_length(client):
+    """Chunked upload with no Content-Length must be rejected before parsing (I2)."""
+    assert _login(client).status_code == 303
+    token = _csrf(client.get("/").text)
+
+    def _chunks():
+        yield b"--x\r\nContent-Disposition: form-data; name=csrf\r\n\r\n"
+        yield token.encode() + b"\r\n--x--\r\n"
+
+    r = client.post(
+        "/jobs",
+        content=_chunks(),
+        headers={"Content-Type": "multipart/form-data; boundary=x"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 411
+    assert "content-length" not in r.request.headers  # sent chunked, no CL
+
+
 def test_job_id_validation(client):
     _login(client)
     assert client.get("/jobs/not-a-hex-id").status_code == 404

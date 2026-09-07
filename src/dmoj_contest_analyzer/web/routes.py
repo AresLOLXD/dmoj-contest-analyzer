@@ -308,8 +308,12 @@ async def create_job_route(request: Request) -> Response:
     conn = _conn(request)
     max_bytes = settings.max_upload_mb * 1024 * 1024
 
+    # Require a numeric Content-Length up front: without it (HTTP/1.1 chunked)
+    # Starlette would spool the entire body to disk before the handler can react.
     content_length = request.headers.get("content-length")
-    if content_length is not None and content_length.isdigit() and int(content_length) > max_bytes:
+    if content_length is None or not content_length.isdigit():
+        raise HttpError(411, "Falta el encabezado Content-Length.")
+    if int(content_length) > max_bytes:
         raise HttpError(413)
 
     form = await request.form()
@@ -381,6 +385,8 @@ async def job_cancel(request: Request, job_id: str) -> Response:
     if row["status"] != "queued":
         raise HttpError(409)
     jobs.set_status(conn, job_id, "cancelled", finished=True)
+    # Drop the participant source immediately; the row is reaped later by retention.
+    _rmtree(Path(_settings(request).data_dir) / job_id)
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
 

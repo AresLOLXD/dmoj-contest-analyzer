@@ -203,3 +203,86 @@ async def test_worker_loop_processes_then_stops(conn, settings):
         await asyncio.wait_for(task, timeout=5)
         state.executor.shutdown(wait=True)
     assert jobs.get_job(conn, jid)["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_llm_judge_failure_is_visible_in_report(conn, settings, monkeypatch):
+    """A judge exception must surface in the report, not vanish (I4)."""
+    settings.backends_config.write_text(BACKENDS_TOML)
+
+    def _boom(*a, **k):
+        raise RuntimeError("endpoint caído")
+
+    monkeypatch.setattr(worker, "_run_judge", _boom)
+    jid = _enqueue(conn, settings, model_ref="openai|gpt-4o")
+    ex = worker.make_executor(settings)
+    try:
+        assert await worker.process_one_job(conn, settings, ex) is True
+    finally:
+        ex.shutdown(wait=True)
+    assert jobs.get_job(conn, jid)["status"] == "done"
+    resumen = {r["Métrica"]: r["Valor"]
+               for r in read_xlsx_values(settings.data_dir / jid / "reporte.xlsx")["Resumen"]}
+    assert "falló" in resumen["Nota juez LLM"]
+
+
+def test_cleanup_once_reaps_cancelled(conn, settings):
+    """A cancelled job's row and directory must be reaped by retention (I1)."""
+    jid = uuid.uuid4().hex
+    (settings.data_dir / jid).mkdir(parents=True)
+    (settings.data_dir / jid / "input.zip").write_bytes(b"student source")
+    jobs.create_job(conn, job_id=jid, owner="alice", model_ref=None,
+                    run_jplag=False, jplag_solo_ac=False, settings=settings)
+    conn.execute("UPDATE jobs SET status='cancelled', finished_at=? WHERE id=?",
+                 ("2000-01-01T00:00:00.000000Z", jid))
+
+    worker._cleanup_once(conn, settings)
+
+    assert jobs.get_job(conn, jid) is None
+    assert not (settings.data_dir / jid).exists()
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_backs_off_on_persistent_failure(settings, monkeypatch):
+    """A crash before the idle wait must not hot-spin the loop (I3)."""
+    calls = {"n": 0}
+
+    async def boom(*a, **k):
+        calls["n"] += 1
+        raise RuntimeError("persistent")
+
+    slept: list[float] = []
+
+    async def fake_sleep(secs):
+        slept.append(secs)
+        if len(slept) >= 3:
+            stop.set()
+
+    monkeypatch.setattr(worker, "process_one_job", boom)
+    monkeypatch.setattr(worker.asyncio, "sleep", fake_sleep)
+    stop = asyncio.Event()
+    state = SimpleNamespace(conn=None, settings=settings, executor=None,
+                            nudge=asyncio.Event())
+    await asyncio.wait_for(worker.worker_loop(state, stop), timeout=5)
+
+    assert calls["n"] >= 3
+    assert all(s >= 1 for s in slept)
+
+
+@pytest.mark.asyncio
+async def test_timeout_kills_pool_worker_processes(conn, settings, monkeypatch):
+    """A timed-out subprocess must be killed, not merely abandoned (I8)."""
+    settings.job_timeout_s = 0.05
+    _enqueue(conn, settings)
+    monkeypatch.setattr(worker, "_analyze_sync", _slow_analyze)
+    ex = worker.make_executor(settings)
+    ex.submit(os.getpid).result()
+    procs = list(ex._processes.values())
+    state = SimpleNamespace(executor=ex)
+    try:
+        await worker.process_one_job(conn, settings, ex, app_state=state)
+    finally:
+        state.executor.shutdown(wait=False, cancel_futures=True)
+    for p in procs:
+        p.join(timeout=5)
+        assert p.exitcode is not None

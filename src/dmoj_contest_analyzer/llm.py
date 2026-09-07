@@ -161,9 +161,12 @@ def judge_one(
     for attempt in (1, 2):
         resp = client.post(url, json=body, headers=headers)
         if resp.status_code in (429, 500, 502, 503, 504) and attempt == 1:
-            time.sleep(min(float(resp.headers.get("Retry-After", 1)), 5))
+            try:
+                delay = float(resp.headers.get("Retry-After", 1))
+            except (ValueError, TypeError):
+                delay = 1
+            time.sleep(min(delay, 5))
             continue
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"]
         return _parse(content, item.key)
-    return JudgeResult(item.key, None)

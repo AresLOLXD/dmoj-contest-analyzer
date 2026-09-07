@@ -16,7 +16,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from .web.auth import hash_password
+from .web.auth import bump_token_version, hash_password
 from .web.db import connect, migrate, utcnow
 
 
@@ -85,6 +85,9 @@ def _cmd_reset_password(conn: sqlite3.Connection, args: argparse.Namespace) -> N
         "WHERE username = ?",
         (hash_password(password), args.username),
     )
+    # Revoke any live sessions — the point of a reset is to lock out whoever
+    # held the old credentials.
+    bump_token_version(conn, args.username)
     print(f"Contraseña de '{args.username}' actualizada.")
 
 

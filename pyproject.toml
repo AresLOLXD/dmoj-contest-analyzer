@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Ares Ulises Juárez Martínez", email = "aresulises8@hotmail.com" }]
-dependencies = ["openpyxl>=3.1"]
+dependencies = ["openpyxl>=3.1", "httpx>=0.27"]
 
 [project.optional-dependencies]
 web = [
@@ -17,7 +17,6 @@ web = [
     "python-multipart>=0.0.9",
     "pydantic-settings",
     "argon2-cffi",
-    "httpx>=0.27",
 ]
 
 [project.scripts]
@@ -48,3 +47,9 @@ ignore = ["E741"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Third-party deprecations emitted when Starlette's TestClient is imported;
+# not our code, nothing to fix here.
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated",
+]

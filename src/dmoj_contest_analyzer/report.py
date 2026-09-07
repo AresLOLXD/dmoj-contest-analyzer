@@ -9,7 +9,7 @@ HEADER_FONT = Font(bold=True)
 
 
 def _safe(value):
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+    if isinstance(value, str) and value.lstrip()[:1] in ("=", "+", "-", "@"):
         return "'" + value
     return value
 
@@ -59,8 +59,8 @@ def write_excel_report(data, out_path: Path):
             ("Casos con llm_ai_score >= 70",
              sum(1 for r in llm_rows if (r["ai_score"] or 0) >= 70)),
         ])
-        if data.llm_partial_note:
-            resumen_data.append(("Nota juez LLM", data.llm_partial_note))
+    if data.llm_partial_note:
+        resumen_data.append(("Nota juez LLM", data.llm_partial_note))
     for k, v in resumen_data:
         ws_resumen.append([k, _safe(v)])
     ws_resumen.column_dimensions["A"].width = 55

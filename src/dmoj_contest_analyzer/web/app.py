@@ -26,7 +26,8 @@ _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": (
-        "default-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'"
+        "default-src 'self'; script-src 'self'; object-src 'none'; "
+        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     ),
 }
 

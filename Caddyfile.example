@@ -6,6 +6,11 @@
 # point. Optionally restrict access by uncommenting one of the blocks below.
 
 analiza.example.org {
+	# Reject oversized uploads at the edge (the app cap is MAX_UPLOAD_MB, default 50).
+	request_body {
+		max_size 60MB
+	}
+
 	reverse_proxy 127.0.0.1:8000
 
 	# Extra login on top of the app's own auth:

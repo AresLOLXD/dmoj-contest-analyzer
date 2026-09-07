@@ -3,7 +3,7 @@ import pytest
 import respx
 
 from dmoj_contest_analyzer.llm import BackendSpec, JudgeItem, judge_one
-from dmoj_contest_analyzer.web.llm_run import run_judge
+from dmoj_contest_analyzer.llm_run import run_judge
 
 SPEC = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
 ITEM = JudgeItem(("u", "p"), "p", "cpp", "int main(){}")
@@ -75,3 +75,26 @@ def test_run_judge_stops_when_on_call_false():
     results = run_judge(items, spec, "gpt-4o", max_tokens=100, max_source_bytes=100,
                         max_workers=1, on_call=on_call)
     assert len(results) == 2
+
+
+@respx.mock
+def test_run_judge_one_failure_does_not_abort_batch():
+    def _cb(request):
+        if b"BOOM" in request.content:
+            return httpx.Response(500, headers={"Retry-After": "0"})
+        return _chat('{"ai_score": 20, "señales": [], "nota": ""}')
+
+    respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_cb)
+    spec = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
+    items = [
+        JudgeItem(("u0", "p"), "p", "cpp", "ok0"),
+        JudgeItem(("u1", "p"), "p", "cpp", "BOOM"),
+        JudgeItem(("u2", "p"), "p", "cpp", "ok2"),
+    ]
+    results = run_judge(items, spec, "gpt-4o", max_tokens=100, max_source_bytes=100,
+                        max_workers=1)
+    by_key = {r.key: r for r in results}
+    assert len(results) == 3
+    assert by_key[("u1", "p")].ai_score is None
+    assert by_key[("u0", "p")].ai_score == 20
+    assert by_key[("u2", "p")].ai_score == 20

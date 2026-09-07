@@ -29,13 +29,13 @@ from dmoj_contest_analyzer.analysis import (
     ReportData,
     run_analysis,
 )
-from dmoj_contest_analyzer.llm import JudgeItem, load_backends, resolve
+from dmoj_contest_analyzer.llm import JudgeItem, load_backends, redact, resolve
+from dmoj_contest_analyzer.llm_run import run_judge
 from dmoj_contest_analyzer.report import write_excel_report
 from dmoj_contest_analyzer.submissions import EXT_TO_JPLAG_LANG
 
 from . import jobs
-from .db import _TIMESTAMP_FORMAT, utcnow
-from .llm_run import run_judge
+from .db import TIMESTAMP_FORMAT, utcnow
 from .upload import UploadRejected, validate_and_extract
 
 log = logging.getLogger(__name__)
@@ -185,9 +185,10 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
         jobs.set_status(conn, jid, "failed", error="el .zip no contenía envíos válidos",
                         finished=True)
         return True
-    except Exception as exc:
+    except Exception:
         log.exception("job %s failed", jid)
-        jobs.set_status(conn, jid, "failed", error=f"error interno: {exc}", finished=True)
+        jobs.set_status(conn, jid, "failed",
+                        error="error interno durante el análisis", finished=True)
         return True
     finally:
         drainer.cancel()
@@ -214,7 +215,11 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
                        row["model_ref"], judge_fn)
         except Exception as exc:  # noqa: BLE001 - judge failure must not fail the job
             log.exception("LLM judge failed for job %s", jid)
-            data.llm_partial_note = f"El juez con IA falló: {exc}"
+            reason = redact(str(exc))[:200]
+            data.llm_partial_note = f"El juez con IA falló: {reason}"
+            jobs.set_progress(
+                conn, jid, f"análisis completo; el juez LLM falló: {reason}"
+            )
         write_excel_report(data, out_path)
 
     jobs.set_status(conn, jid, "done", finished=True)
@@ -303,7 +308,17 @@ def _daily_cap_ok(conn, settings, state: _CapState) -> bool:
 
 
 def _replace_pool(executor: ProcessPoolExecutor, settings, app_state) -> None:
-    """Discard a poisoned/broken pool and hand the caller a fresh one."""
+    """Discard a poisoned/broken pool and hand the caller a fresh one.
+
+    ``shutdown(cancel_futures=True)`` only drops *pending* work; a worker
+    process still running a timed-out job would otherwise leak. Kill them
+    explicitly (CPython-internal attribute, but the alternative is a leak).
+    """
+    for proc in list(getattr(executor, "_processes", {}).values()):
+        try:
+            proc.kill()
+        except (OSError, AttributeError):
+            pass
     executor.shutdown(wait=False, cancel_futures=True)
     if app_state is not None:
         app_state.executor = make_executor(settings)
@@ -338,6 +353,8 @@ async def worker_loop(app_state, stop: asyncio.Event) -> None:
                 await _wait_for_work(stop, app_state.nudge, _IDLE_WAIT_S)
         except Exception:
             log.exception("worker loop iteration failed")
+            # Back off so a persistent failure does not become a hot spin loop.
+            await asyncio.sleep(5)
             continue
 
 
@@ -352,10 +369,10 @@ async def cleanup_loop(app_state, stop: asyncio.Event) -> None:
 
 
 def _cleanup_once(conn, settings) -> None:
-    cutoff = (datetime.strptime(utcnow(), _TIMESTAMP_FORMAT)
-              - timedelta(hours=settings.retention_h)).strftime(_TIMESTAMP_FORMAT)
+    cutoff = (datetime.strptime(utcnow(), TIMESTAMP_FORMAT)
+              - timedelta(hours=settings.retention_h)).strftime(TIMESTAMP_FORMAT)
     expired = conn.execute(
-        "SELECT id FROM jobs WHERE status IN ('done', 'failed') "
+        "SELECT id FROM jobs WHERE status IN ('done', 'failed', 'cancelled') "
         "AND finished_at IS NOT NULL AND finished_at < ?",
         (cutoff,),
     ).fetchall()

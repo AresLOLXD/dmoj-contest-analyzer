@@ -12,11 +12,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import argon2
-from argon2.exceptions import InvalidHash, VerifyMismatchError
+from argon2.exceptions import InvalidHash, VerificationError
 
-from .db import utcnow
+from .db import TIMESTAMP_FORMAT, utcnow
 
-_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 _ATTEMPT_WINDOW = timedelta(minutes=15)
 _SESSION_TTL = timedelta(hours=12)
 
@@ -32,7 +31,9 @@ def verify_password(hash_: str, pw: str) -> bool:
     """Return whether ``pw`` matches ``hash_``; never raises."""
     try:
         return _hasher.verify(hash_, pw)
-    except (VerifyMismatchError, InvalidHash):
+    except (VerificationError, InvalidHash):
+        # VerificationError is the base of VerifyMismatchError and other argon2
+        # verify failures; InvalidHash (a ValueError) is separate.
         return False
 
 
@@ -52,7 +53,7 @@ class LoginThrottled(Exception):
 
 
 def _shift(ts: str, delta: timedelta) -> str:
-    return (datetime.strptime(ts, _TIMESTAMP_FORMAT) + delta).strftime(_TIMESTAMP_FORMAT)
+    return (datetime.strptime(ts, TIMESTAMP_FORMAT) + delta).strftime(TIMESTAMP_FORMAT)
 
 
 def authenticate(conn: sqlite3.Connection, username: str, password: str) -> User | None:

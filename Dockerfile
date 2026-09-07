@@ -31,15 +31,17 @@ ENV JAVA_HOME=/opt/java/openjdk \
     HOME=/tmp XDG_CACHE_HOME=/tmp/.cache \
     JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=/tmp -Djava.util.prefs.userRoot=/tmp/.java -XX:MaxRAMPercentage=45 -XX:ActiveProcessorCount=1" \
     JPLAG_JAR=/opt/jplag/jplag.jar
-# Vendored jar copied BEFORE `COPY --from=build ... /app/src` so a code change
-# does not re-copy 83 MB.
+# Vendored jar copied BEFORE the venv layer so a code change does not re-copy 83 MB.
+# The package is installed non-editable into /app/.venv, so no source tree is needed.
 COPY --chmod=0644 vendor/jplag-6.3.0-jar-with-dependencies.jar /opt/jplag/jplag.jar
 COPY --from=build /app/.venv /app/.venv
-COPY --from=build /app/src /app/src
 RUN useradd -u 10001 -m appuser && mkdir -p /data && chown 10001:10001 /data
 USER 10001:10001
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz').status==200 else 1)"
+# --proxy-headers + a pinned --forwarded-allow-ips are required so the per-IP login
+# throttle keys on the real client, not the loopback reverse proxy. Never use "*".
 CMD ["uvicorn", "dmoj_contest_analyzer.web.app:create_app", "--factory", \
-     "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+     "--host", "0.0.0.0", "--port", "8000", "--workers", "1", \
+     "--proxy-headers", "--forwarded-allow-ips", "127.0.0.1"]
