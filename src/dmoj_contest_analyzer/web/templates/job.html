@@ -19,6 +19,17 @@
 </div>
 {% endif %}
 
+{% if job.status in ("queued", "running") %}
+  {% if elapsed_s is defined and elapsed_s is not none %}
+  <p>En curso desde hace {{ (elapsed_s // 60) }} min {{ (elapsed_s % 60) }} s.</p>
+  {% endif %}
+  {% if updated_ago_s is defined and updated_ago_s is not none %}
+  <p>Última señal hace {{ updated_ago_s }} s.</p>
+  {% endif %}
+  <p class="hint">Los concursos grandes o JPlag pueden tardar varios minutos.
+    Esta página se actualiza sola; no la recargues a mano.</p>
+{% endif %}
+
 {% if job.progress %}<p>Progreso: {{ job.progress }}</p>{% endif %}
 {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
 {% if job.status == "done" %}

@@ -14,6 +14,7 @@ import re
 import secrets
 import sqlite3
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -30,7 +31,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from dmoj_contest_analyzer import llm
 
 from . import auth, jobs
-from .db import utcnow
+from .db import TIMESTAMP_FORMAT, utcnow
 from .upload import UploadRejected, stream_body_to_file
 
 log = logging.getLogger(__name__)
@@ -408,7 +409,12 @@ async def jobs_list(request: Request) -> Response:
 async def job_page(request: Request, job_id: str) -> Response:
     user = require_user(request)
     row = _load_owned_job(request, job_id, user.username)
-    return render("job.html", request, job=row)
+    now = utcnow()
+    elapsed_s = _seconds_between(row["started_at"] or row["created_at"], now)
+    updated_ago_s = _seconds_between(row["progress_at"], now)
+    return render(
+        "job.html", request, job=row, elapsed_s=elapsed_s, updated_ago_s=updated_ago_s
+    )
 
 
 @router.get("/jobs/{job_id}/report")
@@ -443,6 +449,14 @@ async def job_cancel(request: Request, job_id: str) -> Response:
 # --------------------------------------------------------------------------- #
 def _now() -> str:
     return utcnow()
+
+
+def _seconds_between(a: str | None, b: str | None) -> int | None:
+    if not a or not b:
+        return None
+    ta = datetime.strptime(a, TIMESTAMP_FORMAT)
+    tb = datetime.strptime(b, TIMESTAMP_FORMAT)
+    return int(abs((tb - ta).total_seconds()))
 
 
 def _truthy(value) -> bool:

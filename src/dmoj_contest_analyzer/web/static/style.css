@@ -20,6 +20,7 @@ label { display: grid; gap: 0.25rem; }
 button { padding: 0.5rem 1rem; cursor: pointer; width: fit-content; }
 .error { color: #b00020; font-weight: 600; }
 .mono { font-family: ui-monospace, monospace; word-break: break-all; }
+.hint { color: #555; font-size: 0.9em; }
 #upload { margin: 1rem 0; padding: 1rem; border: 1px solid #8888; border-radius: 4px; }
 #uploadprogress { display: block; width: 100%; margin-top: 0.5rem; }
 .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 3px;

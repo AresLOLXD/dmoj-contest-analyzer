@@ -291,6 +291,35 @@ def test_job_page_queued_has_no_upload_widget(client, settings):
     assert "/static/upload.js" not in html
 
 
+def test_job_page_shows_elapsed_and_last_signal(client, settings):
+    _login(client)
+    token = _csrf(client.get("/").text)
+    jid = _create_job(client, token)
+    c = connect(settings.db_path())
+    c.execute(
+        "UPDATE jobs SET status='running', started_at=?, progress='timing y estilo', "
+        "progress_at=? WHERE id=?",
+        ("2000-01-01T00:00:00.000000Z", "2000-01-01T00:00:00.000000Z", jid),
+    )
+    c.close()
+    html = client.get(f"/jobs/{jid}").text
+    assert "En curso desde hace" in html
+    assert "Última señal hace" in html
+    assert "pueden tardar varios minutos" in html
+
+
+def test_seconds_between_handles_none():
+    from dmoj_contest_analyzer.web.routes import _seconds_between
+
+    assert _seconds_between(None, "2026-01-01T00:00:00.000000Z") is None
+    assert (
+        _seconds_between(
+            "2026-01-01T00:00:00.000000Z", "2026-01-01T00:00:10.000000Z"
+        )
+        == 10
+    )
+
+
 def test_healthz_unhealthy_without_jar(client):
     assert client.get("/healthz").status_code == 503
 
