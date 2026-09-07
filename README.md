@@ -131,7 +131,6 @@ ya viene en la imagen; el `.jar` de JPlag se descarga al construir (ver abajo).
 ```bash
 cp backends.example.toml backends.toml       # modelos, URLs y backends del juez LLM
 cp .env.example .env                          # y edítalo: APP_SECRET_KEY, API keys, límites
-mkdir -p data && sudo chown -R 10001:10001 data   # uid del contenedor; si no, EACCES al crear la DB
 
 # El .jar de JPlag no está en el repo; descárgalo a vendor/ antes de construir
 mkdir -p vendor
@@ -142,10 +141,16 @@ echo "5f2c21e8b88ed77134effcb3a5a3ab13d188f6a3e16d401387f7479e92db9aa2  vendor/j
 docker compose up -d
 ```
 
+El estado (`state.db`, tokens, reportes) vive en el volumen con nombre `data`,
+que se crea en el primer `up` con la propiedad correcta (uid 10001) — no hay
+carpeta del host que preparar. Para respaldarlo:
+`docker compose down && docker run --rm -v dmoj-contest-analyzer_data:/d -v "$PWD":/b alpine tar czf /b/data-backup.tgz -C /d .`
+(con podman: `podman volume export dmoj-contest-analyzer_data -o data-backup.tar`).
+
 **Con Podman:** usa `podman compose up -d`. Necesita el servicio activo
-(`systemctl --user start podman.socket`). En hosts con SELinux en modo
-enforcing, si `podman compose build` falla con `Permission denied` leyendo un
-archivo del contexto, construye aparte y levanta sin reconstruir:
+(`systemctl --user start podman.socket`). En hosts con **SELinux enforcing**, si
+`podman compose build` falla con `Permission denied` leyendo un archivo del
+contexto, construye aparte y levanta sin reconstruir:
 `podman build -t dmoj-contest-analyzer:local . && podman compose up -d --no-build`.
 
 Genera el secreto con `openssl rand -hex 32` y pégalo en `APP_SECRET_KEY` dentro de
@@ -159,7 +164,8 @@ delante). Para cambiar puerto o dirección, define `WEB_BIND` en `.env`, p. ej.
 ### Primer arranque
 
 Sin usuarios, solo `/setup` responde. El token (de un solo uso) se imprime en
-`docker compose logs` y se escribe en `./data/setup_token`. Con él creas el primer
+`docker compose logs` y se escribe en `/data/setup_token` dentro del contenedor
+(`docker compose exec analyzer cat /data/setup_token`). Con él creas el primer
 usuario; el primer login te obliga a cambiar la contraseña.
 
 ### Gestión de usuarios

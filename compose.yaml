@@ -1,6 +1,8 @@
 # Local / single-host deployment. TLS is terminated by a reverse proxy in front.
-# Before the first `up`: `mkdir -p ./data && sudo chown -R 10001:10001 ./data`
-# (otherwise the app hits EACCES creating state.db). See README.
+# State lives in the named volume `data` (created on first `up`): it inherits the
+# image's /data ownership (uid 10001) on both Docker and rootless podman, so there
+# is no host directory to pre-chown. Back it up with `docker volume` / `podman
+# volume export dmoj-contest-analyzer_data`. See README.
 services:
   analyzer:
     build: .
@@ -23,7 +25,7 @@ services:
       # under /data by upload.py/worker.py, so /data/tmp is materialised there.
       TMPDIR: /data/tmp
     volumes:
-      - ./data:/data
+      - data:/data
       - ./backends.toml:/config/backends.toml:ro
     extra_hosts: ["host.docker.internal:host-gateway"]
     read_only: true
@@ -41,3 +43,6 @@ services:
     pids_limit: 512
     ulimits: { nofile: 4096 }
     restart: unless-stopped
+
+volumes:
+  data: {}

@@ -111,9 +111,16 @@ Los nombres son insensibles a mayúsculas. Los defaults salen de
 | Variable | Default | Descripción |
 | --- | --- | --- |
 | `APP_SECRET_KEY` | — (obligatorio) | Clave para firmar la cookie de sesión. Genera con `openssl rand -hex 32`. Cambiarla invalida todas las sesiones. |
-| `DATA_DIR` | `/data` | Directorio de estado dentro del contenedor: `state.db`, tokens, trabajos, reportes. Se monta desde `./data` del host. |
+| `DATA_DIR` | `/data` | Directorio de estado dentro del contenedor: `state.db`, tokens, trabajos, reportes. Respaldado por el volumen con nombre `data`. |
 | `BACKENDS_CONFIG` | `/config/backends.toml` | Ruta al `backends.toml` dentro del contenedor. |
 | `JPLAG_JAR` | `/opt/jplag/jplag.jar` | Ruta al jar de JPlag (ya viene en la imagen). |
+
+> **Volumen `data`.** El estado vive en un volumen con nombre (`data`), no en un
+> bind del host. Se crea en el primer `up` heredando la propiedad de `/data` en
+> la imagen (uid `10001`), así que funciona en Docker y en rootless podman sin
+> ningún `chown` manual. Respaldo: `podman volume export
+> dmoj-contest-analyzer_data -o data.tar` (o el equivalente con `docker run ...
+> tar`). Para empezar de cero: `docker compose down -v`.
 
 #### Límites de subida y archivo
 
