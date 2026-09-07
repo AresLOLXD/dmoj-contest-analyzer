@@ -30,7 +30,7 @@ from dmoj_contest_analyzer.analysis import (
     run_analysis,
 )
 from dmoj_contest_analyzer.llm import JudgeItem, load_backends, redact, resolve
-from dmoj_contest_analyzer.llm_run import run_judge
+from dmoj_contest_analyzer.llm_run import DeadlineState, run_judge
 from dmoj_contest_analyzer.report import write_excel_report
 from dmoj_contest_analyzer.submissions import EXT_TO_JPLAG_LANG
 
@@ -208,11 +208,14 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
     )
 
     if row["model_ref"]:
+        llm_pool = getattr(app_state, "llm_pool", None) if app_state is not None else None
         try:
-            # Runs in the coroutine (blocking): keeps respx usable in tests and
-            # the sqlite connection on its owning thread.
-            _run_judge(conn, settings, data, Path(result["source_dir"]),
-                       row["model_ref"], judge_fn)
+            await asyncio.to_thread(
+                _run_judge, conn, settings, data, Path(result["source_dir"]),
+                row["model_ref"], judge_fn,
+                llm_pool=llm_pool,
+                total_deadline_s=settings.llm_judge_total_timeout_s,
+            )
         except Exception as exc:  # noqa: BLE001 - judge failure must not fail the job
             log.exception("LLM judge failed for job %s", jid)
             reason = redact(str(exc))[:200]
@@ -220,7 +223,7 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
             jobs.set_progress(
                 conn, jid, f"análisis completo; el juez LLM falló: {reason}"
             )
-        write_excel_report(data, out_path)
+        await asyncio.to_thread(write_excel_report, data, out_path)
 
     jobs.set_status(conn, jid, "done", finished=True)
     zip_path.unlink(missing_ok=True)
@@ -229,7 +232,7 @@ async def process_one_job(conn, settings, executor, *, judge_fn=run_judge, app_s
 
 
 def _run_judge(conn, settings, data: ReportData, source_dir: Path, model_ref: str,
-               judge_fn) -> None:
+               judge_fn, *, llm_pool=None, total_deadline_s=None) -> None:
     backends = load_backends(settings.backends_config)
     spec, model = resolve(model_ref, backends)
 
@@ -259,11 +262,15 @@ def _run_judge(conn, settings, data: ReportData, source_dir: Path, model_ref: st
         ))
 
     stopped = _CapState()
+    timed_out = DeadlineState()
     results = judge_fn(
         items, spec, model,
         max_tokens=settings.llm_max_tokens_per_call,
         max_source_bytes=settings.max_submission_bytes,
         on_call=functools.partial(_daily_cap_ok, conn, settings, stopped),
+        executor=llm_pool,
+        total_deadline_s=total_deadline_s,
+        deadline_state=timed_out,
     )
 
     row_by_key = {(r["usuario"], r["problema"]): r for r in data.main_rows}
@@ -285,6 +292,11 @@ def _run_judge(conn, settings, data: ReportData, source_dir: Path, model_ref: st
         partial_note = (
             f"Juez con IA detenido: se alcanzó el tope diario de "
             f"{settings.llm_max_calls_per_day} llamadas."
+        )
+    elif timed_out.hit:
+        partial_note = (
+            f"Juez con IA detenido: se alcanzó el límite de "
+            f"{settings.llm_judge_total_timeout_s:.0f} s de tiempo total."
         )
     data.llm_partial_note = partial_note
 

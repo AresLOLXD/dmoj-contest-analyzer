@@ -23,9 +23,15 @@ def utcnow() -> str:
 
 
 def connect(path: Path) -> sqlite3.Connection:
-    """Open ``path`` with the pragmas the job store relies on."""
+    """Open ``path`` with the pragmas the job store relies on.
+
+    ``check_same_thread=False``: the connection is handed to ``asyncio.to_thread``
+    workers (Excel writing, LLM judge). Python's sqlite3 serializes statements
+    across threads, and the owning coroutine always ``await``s the thread, so
+    there is no concurrent use.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None)
+    conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

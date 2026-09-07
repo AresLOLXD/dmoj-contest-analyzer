@@ -165,6 +165,48 @@ async def test_llm_daily_cap_stops_judge(conn, settings):
     assert "tope diario" in resumen["Nota juez LLM"]
 
 
+@pytest.mark.asyncio
+async def test_worker_does_not_block_event_loop(conn, settings, monkeypatch):
+    """While a job's judge + report writing run, the loop must stay responsive."""
+    settings.backends_config.write_text(BACKENDS_TOML)
+
+    def _slow_judge(*a, **k):
+        import time
+        time.sleep(1.0)  # simulates a slow LLM judge
+
+    monkeypatch.setattr(worker, "_run_judge", _slow_judge)
+
+    real_write = worker.write_excel_report
+
+    def _slow_write(data, path):
+        import time
+        time.sleep(0.5)
+        return real_write(data, path)
+
+    monkeypatch.setattr(worker, "write_excel_report", _slow_write)
+
+    jid = _enqueue(conn, settings, model_ref="openai|gpt-4o")
+    ex = worker.make_executor(settings)
+
+    ticks = {"n": 0}
+
+    async def ticker():
+        while True:
+            ticks["n"] += 1
+            await asyncio.sleep(0.05)
+
+    t = asyncio.create_task(ticker())
+    try:
+        assert await worker.process_one_job(conn, settings, ex) is True
+    finally:
+        t.cancel()
+        ex.shutdown(wait=True)
+
+    # ~1.5 s of blocking work would leave ticks near 0 if it ran on the loop.
+    assert ticks["n"] > 10
+    assert jobs.get_job(conn, jid)["status"] == "done"
+
+
 def test_cleanup_once_reaps_expired(conn, settings):
     old = uuid.uuid4().hex
     fresh = uuid.uuid4().hex
