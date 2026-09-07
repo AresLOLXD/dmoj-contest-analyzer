@@ -21,6 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from dmoj_contest_analyzer import ingest
 from dmoj_contest_analyzer.analysis import (
@@ -35,7 +36,7 @@ from dmoj_contest_analyzer.report import write_excel_report
 from dmoj_contest_analyzer.submissions import EXT_TO_JPLAG_LANG
 
 from . import jobs
-from .db import TIMESTAMP_FORMAT, utcnow
+from .db import TIMESTAMP_FORMAT, connect, utcnow
 from .upload import UploadRejected, validate_and_extract
 
 log = logging.getLogger(__name__)
@@ -381,23 +382,35 @@ async def worker_loop(ns, stop: asyncio.Event) -> None:
             continue
 
 
+def _close_namespaces(namespaces) -> None:
+    for ns in namespaces:
+        ns.executor.shutdown(wait=False, cancel_futures=True)
+        ns.conn.close()
+
+
 async def run_workers(app_state, stop: asyncio.Event) -> None:
     """Supervisor: N worker coroutines, each with its own connection and pool."""
-    from types import SimpleNamespace
-
-    from .db import connect
-
     settings = app_state.settings
     n = max(1, settings.max_concurrent_jobs)
     namespaces = []
-    for _ in range(n):
-        namespaces.append(SimpleNamespace(
-            settings=settings,
-            conn=connect(settings.db_path()),
-            executor=make_executor(settings),
-            nudge=app_state.nudge,
-            llm_pool=getattr(app_state, "llm_pool", None),
-        ))
+    try:
+        for _ in range(n):
+            conn = connect(settings.db_path())
+            try:
+                executor = make_executor(settings)
+            except Exception:
+                conn.close()
+                raise
+            namespaces.append(SimpleNamespace(
+                settings=settings,
+                conn=conn,
+                executor=executor,
+                nudge=app_state.nudge,
+                llm_pool=getattr(app_state, "llm_pool", None),
+            ))
+    except Exception:
+        _close_namespaces(namespaces)
+        raise
     tasks = [asyncio.create_task(worker_loop(ns, stop)) for ns in namespaces]
     try:
         await stop.wait()
@@ -405,9 +418,7 @@ async def run_workers(app_state, stop: asyncio.Event) -> None:
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        for ns in namespaces:
-            ns.executor.shutdown(wait=False, cancel_futures=True)
-            ns.conn.close()
+        _close_namespaces(namespaces)
 
 
 async def cleanup_loop(app_state, stop: asyncio.Event) -> None:
@@ -417,7 +428,13 @@ async def cleanup_loop(app_state, stop: asyncio.Event) -> None:
             _cleanup_once(app_state.conn, app_state.settings)
         except Exception:
             log.exception("cleanup iteration failed")
-        await _wait_for_work(stop, app_state.nudge, interval)
+        # Not nudged: cleanup has no reason to react to new jobs, and the shared
+        # nudge Event can stay set while all workers are busy (they only clear it
+        # at the top of their loop), which would hot-spin this loop.
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            pass
 
 
 def _cleanup_once(conn, settings) -> None:

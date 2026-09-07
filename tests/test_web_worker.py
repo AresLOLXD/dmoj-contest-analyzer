@@ -285,6 +285,30 @@ def test_cleanup_once_reaps_cancelled(conn, settings):
 
 
 @pytest.mark.asyncio
+async def test_cleanup_loop_does_not_spin_when_nudge_is_set(conn, settings, monkeypatch):
+    """cleanup_loop must not react to the shared nudge: a set nudge (all workers
+    busy) would otherwise hot-spin _cleanup_once against the SQLite write lock."""
+    settings.cleanup_every_min = 60  # long interval; one pass then wait on stop
+    calls = {"n": 0}
+
+    def _count(*a, **k):
+        calls["n"] += 1
+
+    monkeypatch.setattr(worker, "_cleanup_once", _count)
+    stop = asyncio.Event()
+    nudge = asyncio.Event()
+    nudge.set()  # simulate a handler that enqueued while every worker was busy
+    state = SimpleNamespace(conn=conn, settings=settings, nudge=nudge)
+    task = asyncio.create_task(worker.cleanup_loop(state, stop))
+    await asyncio.sleep(0.5)
+    stop.set()
+    nudge.set()
+    await asyncio.wait_for(task, timeout=5)
+
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
 async def test_worker_loop_backs_off_on_persistent_failure(settings, monkeypatch):
     """A crash before the idle wait must not hot-spin the loop (I3)."""
     calls = {"n": 0}
@@ -333,6 +357,7 @@ def _slow_concurrent_probe(job_id, zip_path, work_dir, out_path, opts_dict, prog
 
 def _slow_report(job_id, zip_path, work_dir, out_path, opts_dict, progress_q):
     import time
+    progress_q.put_nowait("procesando envíos")
     time.sleep(0.6)
     return _report_shape(work_dir)
 
@@ -385,9 +410,21 @@ async def test_worker_writes_isolated_from_handler_rollback(conn, settings, monk
             await asyncio.sleep(0.05)
         assert jobs.get_job(conn, jid)["status"] == "running"
 
+        # Wait until the worker drained a progress line onto its own connection.
+        for _ in range(40):
+            if jobs.get_job(conn, jid)["progress"]:
+                break
+            await asyncio.sleep(0.05)
+        assert jobs.get_job(conn, jid)["progress"] == "procesando envíos"
+
+        # A request handler: open a transaction, write, then roll back. On a
+        # separate connection this must not touch the worker's committed writes.
         other = connect(settings.db_path())
         try:
             other.execute("BEGIN IMMEDIATE")
+            other.execute(
+                "UPDATE jobs SET progress='handler garbage' WHERE id=?", (jid,)
+            )
             other.execute("ROLLBACK")
         finally:
             other.close()
@@ -401,7 +438,10 @@ async def test_worker_writes_isolated_from_handler_rollback(conn, settings, monk
         state.nudge.set()
         await asyncio.wait_for(sup, timeout=10)
 
-    assert jobs.get_job(conn, jid)["status"] == "done"
+    row = jobs.get_job(conn, jid)
+    assert row["status"] == "done"
+    # The progress the worker wrote during the window survived the rollback.
+    assert row["progress"] == "procesando envíos"
 
 
 @pytest.mark.asyncio
