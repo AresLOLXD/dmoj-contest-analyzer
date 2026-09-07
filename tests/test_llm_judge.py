@@ -1,9 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import httpx
 import pytest
 import respx
 
 from dmoj_contest_analyzer.llm import BackendSpec, JudgeItem, judge_one
-from dmoj_contest_analyzer.llm_run import run_judge
+from dmoj_contest_analyzer.llm_run import DeadlineState, run_judge
 
 SPEC = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
 ITEM = JudgeItem(("u", "p"), "p", "cpp", "int main(){}")
@@ -98,3 +100,39 @@ def test_run_judge_one_failure_does_not_abort_batch():
     assert by_key[("u1", "p")].ai_score is None
     assert by_key[("u0", "p")].ai_score == 20
     assert by_key[("u2", "p")].ai_score == 20
+
+
+@respx.mock
+def test_run_judge_uses_external_executor_without_closing_it():
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=_chat('{"ai_score": 7, "señales": [], "nota": ""}')
+    )
+    spec = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
+    items = [JudgeItem((f"u{i}", "p"), "p", "cpp", "x") for i in range(3)]
+    pool = ThreadPoolExecutor(max_workers=2)
+    try:
+        results = run_judge(items, spec, "gpt-4o", max_tokens=100, max_source_bytes=100,
+                            executor=pool)
+        assert len(results) == 3
+        # Still usable: the pool was not shut down by run_judge.
+        assert pool.submit(lambda: 42).result() == 42
+    finally:
+        pool.shutdown(wait=True)
+
+
+@respx.mock
+def test_run_judge_total_deadline_cancels_pending():
+    def _slow(request):
+        import time
+        time.sleep(0.4)
+        return _chat('{"ai_score": 3, "señales": [], "nota": ""}')
+
+    respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_slow)
+    spec = BackendSpec("openai", "OpenAI", "https://api.openai.com/v1", ["gpt-4o"], True, "sk-x")
+    items = [JudgeItem((f"u{i}", "p"), "p", "cpp", "x") for i in range(4)]
+    state = DeadlineState()
+    results = run_judge(items, spec, "gpt-4o", max_tokens=100, max_source_bytes=100,
+                        max_workers=1, total_deadline_s=0.1, deadline_state=state)
+    assert len(results) == 4
+    assert any(r.ai_score is None for r in results)
+    assert state.hit is True
